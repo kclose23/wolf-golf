@@ -42,9 +42,10 @@ export default function HomeScreen({ onJoined }) {
         joinCode: code,
         dollarPerPoint: parseFloat(dollarPerPoint) || 1,
       })
-      const player = await createPlayer({ tripId: trip.id, name: adminName.trim(), handicap: 0, isAdmin: true })
+      const player = await createPlayer({ tripId: trip.id, name: adminName.trim(), handicap: 0 })
       actions.setTrip(trip)
       actions.setPlayerId(player.id)
+      actions.setAdmin(true)
       await actions.reload()
       onJoined({ isAdmin: true, newTrip: true })
     } catch (err) {

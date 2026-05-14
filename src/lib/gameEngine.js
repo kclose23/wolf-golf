@@ -42,7 +42,7 @@ export function calcStableford(scores, groupings, courses) {
       const hole = holes.find((h) => h.hole_number === score.hole_number)
       if (!hole) continue
 
-      const net = netScore(score.gross_score, player.player.handicap, hole.stroke_index)
+      const net = netScore(score.gross_strokes, player.player.handicap, hole.stroke_index)
       const pts = stablefordPoints(net - hole.par)
 
       if (!playerTotals[score.player_id]) {
@@ -197,8 +197,8 @@ export function calcSkins(scores, groupings, holes, dollarPerSkin = 1) {
       .map((pid) => {
         const g = groupings.find((g) => g.player_id === pid)
         const s = scores.find((s) => s.player_id === pid && s.hole_number === hole)
-        if (!s || s.gross_score === null) return null
-        const net = netScore(s.gross_score, g?.player?.handicap || 0, holeData.stroke_index)
+        if (!s || s.gross_strokes === null) return null
+        const net = netScore(s.gross_strokes, g?.player?.handicap || 0, holeData.stroke_index)
         return { playerId: pid, net }
       })
       .filter(Boolean)
@@ -252,8 +252,8 @@ export function calcNassau(scores, groupings, holes, groupNumber) {
     for (const pid of playerIds) {
       const g = groupPlayers.find((g) => g.player_id === pid)
       const s = scores.find((sc) => sc.player_id === pid && sc.hole_number === hole)
-      if (!s || s.gross_score === null) continue
-      const net = netScore(s.gross_score, g?.player?.handicap || 0, holeData.stroke_index)
+      if (!s || s.gross_strokes === null) continue
+      const net = netScore(s.gross_strokes, g?.player?.handicap || 0, holeData.stroke_index)
       netTotals[pid][segment] += net
       netTotals[pid].total += net
     }

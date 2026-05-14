@@ -35,7 +35,14 @@ export default function CourseScanScreen({ onBack, onSaved }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ imageBase64: base64, mediaType }),
       })
-      const data = await res.json()
+
+      let data
+      try {
+        data = await res.json()
+      } catch {
+        throw new Error('Scan API unreachable — check that the dev server is running correctly.')
+      }
+
       if (!res.ok) throw new Error(data.error || 'Scan failed')
 
       setCourseName(data.courseName || '')

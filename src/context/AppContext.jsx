@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useReducer, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
-import { getTripByCode, loadTripData, getGroupings, getScores, getWolfHoles } from '../lib/db'
+import { getTripByCode, loadTripData, getPlayers, getGroupings, getScores, getWolfHoles } from '../lib/db'
 import { flushQueue } from '../lib/offline'
 
 const AppContext = createContext(null)
@@ -10,6 +10,7 @@ const LOCAL_KEYS = {
   tripId: 'wolf_golf_trip_id',
   playerId: 'wolf_golf_player_id',
   activeRoundId: 'wolf_golf_active_round_id',
+  isAdmin: 'wolf_golf_is_admin',
 }
 
 function loadLocal() {
@@ -18,6 +19,7 @@ function loadLocal() {
     tripId: localStorage.getItem(LOCAL_KEYS.tripId) || '',
     playerId: localStorage.getItem(LOCAL_KEYS.playerId) || '',
     activeRoundId: localStorage.getItem(LOCAL_KEYS.activeRoundId) || '',
+    isAdmin: localStorage.getItem(LOCAL_KEYS.isAdmin) === 'true',
   }
 }
 
@@ -56,12 +58,16 @@ function reducer(state, action) {
       localStorage.setItem(LOCAL_KEYS.activeRoundId, action.roundId)
       return { ...state, activeRoundId: action.roundId }
     }
+    case 'SET_ADMIN': {
+      localStorage.setItem(LOCAL_KEYS.isAdmin, String(action.value))
+      return { ...state, isAdmin: action.value }
+    }
     case 'UPSERT_SCORE': {
       const { roundId, playerId, holeNumber, grossScore } = action
       const existing = state.scores.findIndex(
         (s) => s.round_id === roundId && s.player_id === playerId && s.hole_number === holeNumber
       )
-      const newScore = { round_id: roundId, player_id: playerId, hole_number: holeNumber, gross_score: grossScore }
+      const newScore = { round_id: roundId, player_id: playerId, hole_number: holeNumber, gross_strokes: grossScore }
       const scores = existing >= 0
         ? state.scores.map((s, i) => (i === existing ? newScore : s))
         : [...state.scores, newScore]
@@ -77,6 +83,7 @@ function reducer(state, action) {
         : [...state.wolfHoles, wh]
       return { ...state, wolfHoles }
     }
+    case 'SET_PLAYERS': return { ...state, players: action.players }
     case 'SET_PAYMENTS': return { ...state, payments: action.payments }
     case 'CLEAR_SESSION': {
       Object.values(LOCAL_KEYS).forEach((k) => localStorage.removeItem(k))
@@ -139,7 +146,7 @@ export function AppProvider({ children }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'scores' }, (payload) => {
         const s = payload.new
         if (s && s.round_id === state.activeRoundId) {
-          dispatch({ type: 'UPSERT_SCORE', ...s, roundId: s.round_id, playerId: s.player_id, holeNumber: s.hole_number, grossScore: s.gross_score })
+          dispatch({ type: 'UPSERT_SCORE', ...s, roundId: s.round_id, playerId: s.player_id, holeNumber: s.hole_number, grossScore: s.gross_strokes })
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'wolf_holes' }, (payload) => {
@@ -177,12 +184,19 @@ export function AppProvider({ children }) {
     setTrip(trip) {
       dispatch({ type: 'SET_JOIN_INFO', joinCode: trip.join_code, tripId: trip.id })
     },
+    setAdmin(value) {
+      dispatch({ type: 'SET_ADMIN', value })
+    },
     setActiveRound(roundId) {
       dispatch({ type: 'SET_ACTIVE_ROUND', roundId })
       loadRoundData(roundId)
     },
     async reload() {
       await loadTrip(state.tripId, state.activeRoundId)
+    },
+    async reloadPlayers() {
+      const players = await getPlayers(state.tripId)
+      dispatch({ type: 'SET_PLAYERS', players })
     },
     updateScore(roundId, playerId, holeNumber, grossScore) {
       dispatch({ type: 'UPSERT_SCORE', roundId, playerId, holeNumber, grossScore })

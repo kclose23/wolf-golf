@@ -59,7 +59,7 @@ export async function flushQueue() {
           round_id: x.data.roundId,
           player_id: x.data.playerId,
           hole_number: x.data.holeNumber,
-          gross_score: x.data.grossScore,
+          gross_strokes: x.data.grossScore,
         }))
       )
     }

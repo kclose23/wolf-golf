@@ -1,5 +1,8 @@
 import { supabase } from './supabase'
 
+// Colors auto-assigned to players in order
+const PLAYER_COLORS = ['#16a34a','#2563eb','#dc2626','#d97706','#7c3aed','#db2777','#0891b2','#65a30d']
+
 // ── Trips ──────────────────────────────────────────────────────────────────
 
 export async function getTripByCode(joinCode) {
@@ -42,10 +45,12 @@ export async function getPlayers(tripId) {
   return data
 }
 
-export async function createPlayer({ tripId, name, handicap = 0, isAdmin = false }) {
+export async function createPlayer({ tripId, name, handicap = 0, colorHex }) {
+  // Pick next available color if not specified
+  const color = colorHex || PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)]
   const { data, error } = await supabase
     .from('players')
-    .insert({ trip_id: tripId, name, handicap, is_admin: isAdmin })
+    .insert({ trip_id: tripId, name, handicap, color_hex: color })
     .select()
     .single()
   if (error) throw error
@@ -73,7 +78,6 @@ export async function getCourses(tripId) {
 }
 
 export async function saveCourse({ tripId, name, roundNumber, holes }) {
-  // upsert course
   const { data: course, error: cErr } = await supabase
     .from('courses')
     .upsert(
@@ -84,7 +88,6 @@ export async function saveCourse({ tripId, name, roundNumber, holes }) {
     .single()
   if (cErr) throw cErr
 
-  // delete old holes then insert fresh
   await supabase.from('holes').delete().eq('course_id', course.id)
 
   const holeRows = holes.map((h) => ({
@@ -112,11 +115,11 @@ export async function getRounds(tripId) {
   return data
 }
 
-export async function createOrUpdateRound({ tripId, roundNumber, courseId, date, status = 'pending' }) {
+export async function createOrUpdateRound({ tripId, roundNumber, courseId, date, status = 'active' }) {
   const { data, error } = await supabase
     .from('rounds')
     .upsert(
-      { trip_id: tripId, round_number: roundNumber, course_id: courseId, date, status },
+      { trip_id: tripId, round_number: roundNumber, course_id: courseId || null, date: date || null, status },
       { onConflict: 'trip_id,round_number' }
     )
     .select()
@@ -131,7 +134,7 @@ export async function setRoundStatus(roundId, status) {
 }
 
 // ── Groupings ──────────────────────────────────────────────────────────────
-// One row per player per round: which group + wolf position
+// One row per player per round: which group + wolf order (1–4)
 
 export async function getGroupings(roundId) {
   const { data, error } = await supabase
@@ -139,13 +142,13 @@ export async function getGroupings(roundId) {
     .select('*, player:players(*)')
     .eq('round_id', roundId)
     .order('group_number')
-    .order('wolf_position')
+    .order('wolf_order')
   if (error) throw error
   return data
 }
 
 export async function saveGroupings(roundId, groupingsArray) {
-  // groupingsArray: [{ playerId, groupNumber, wolfPosition }]
+  // groupingsArray: [{ playerId, groupNumber, wolfOrder }]
   await supabase.from('groupings').delete().eq('round_id', roundId)
   if (!groupingsArray.length) return
 
@@ -153,13 +156,14 @@ export async function saveGroupings(roundId, groupingsArray) {
     round_id: roundId,
     player_id: g.playerId,
     group_number: g.groupNumber,
-    wolf_position: g.wolfPosition,
+    wolf_order: g.wolfOrder,
   }))
   const { error } = await supabase.from('groupings').insert(rows)
   if (error) throw error
 }
 
 // ── Scores ─────────────────────────────────────────────────────────────────
+// DB column: gross_strokes (not gross_score)
 
 export async function getScores(roundId) {
   const { data, error } = await supabase
@@ -175,22 +179,29 @@ export async function upsertScore({ roundId, playerId, holeNumber, grossScore })
   const { error } = await supabase
     .from('scores')
     .upsert(
-      { round_id: roundId, player_id: playerId, hole_number: holeNumber, gross_score: grossScore },
+      { round_id: roundId, player_id: playerId, hole_number: holeNumber, gross_strokes: grossScore },
       { onConflict: 'round_id,player_id,hole_number' }
     )
   if (error) throw error
 }
 
-// Batch upsert multiple scores at once
 export async function upsertScores(scores) {
   if (!scores.length) return
+  // scores array uses gross_strokes column
+  const rows = scores.map((s) => ({
+    round_id: s.round_id,
+    player_id: s.player_id,
+    hole_number: s.hole_number,
+    gross_strokes: s.gross_score ?? s.gross_strokes,
+  }))
   const { error } = await supabase
     .from('scores')
-    .upsert(scores, { onConflict: 'round_id,player_id,hole_number' })
+    .upsert(rows, { onConflict: 'round_id,player_id,hole_number' })
   if (error) throw error
 }
 
 // ── Wolf Holes ─────────────────────────────────────────────────────────────
+// No carry_value column in DB — carry is computed from hole sequence in memory
 
 export async function getWolfHoles(roundId) {
   const { data, error } = await supabase
@@ -205,8 +216,11 @@ export async function getWolfHoles(roundId) {
 export async function upsertWolfHole({
   roundId, groupNumber, holeNumber,
   wolfPlayerId, partnerPlayerId, declaration,
-  baseValue, carryValue, result,
+  baseValue, result,
 }) {
+  const { MULTIPLIERS } = await import('./gameEngine')
+  const multiplier = MULTIPLIERS[declaration] || 1
+
   const { error } = await supabase
     .from('wolf_holes')
     .upsert(
@@ -217,8 +231,8 @@ export async function upsertWolfHole({
         wolf_player_id: wolfPlayerId,
         partner_player_id: partnerPlayerId || null,
         declaration,
+        multiplier,
         base_value: baseValue,
-        carry_value: carryValue,
         result: result || null,
       },
       { onConflict: 'round_id,group_number,hole_number' }

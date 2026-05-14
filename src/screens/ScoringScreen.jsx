@@ -22,7 +22,7 @@ export default function ScoringScreen({ setScreen }) {
   const myGroupNumber = myGrouping?.group_number
   const myGroupPlayers = groupings
     .filter((g) => g.group_number === myGroupNumber)
-    .sort((a, b) => a.wolf_position - b.wolf_position)
+    .sort((a, b) => a.wolf_order - b.wolf_order)
 
   const isScorer = Boolean(myGrouping) // only players in a group can score
 
@@ -108,7 +108,7 @@ export default function ScoringScreen({ setScreen }) {
   const holeScores = Object.fromEntries(
     myGroupPlayers.map((g) => {
       const s = scores.find((sc) => sc.player_id === g.player_id && sc.hole_number === holeNumber && sc.round_id === activeRoundId)
-      return [g.player_id, s?.gross_score ?? '']
+      return [g.player_id, s?.gross_strokes ?? '']
     })
   )
   const [draftScores, setDraftScores] = useState(holeScores)
@@ -123,7 +123,7 @@ export default function ScoringScreen({ setScreen }) {
     const newDraft = Object.fromEntries(
       myGroupPlayers.map((g) => {
         const s = scores.find((sc) => sc.player_id === g.player_id && sc.hole_number === nextHole && sc.round_id === activeRoundId)
-        return [g.player_id, s?.gross_score ?? '']
+        return [g.player_id, s?.gross_strokes ?? '']
       })
     )
     setDraftScores(newDraft)
@@ -228,7 +228,7 @@ export default function ScoringScreen({ setScreen }) {
         <div className="flex gap-1 justify-center">
           {Array.from({ length: totalHoles }, (_, i) => {
             const h = i + 1
-            const hasScore = myGroupPlayers.every((g) => scores.some((s) => s.player_id === g.player_id && s.hole_number === h && s.round_id === activeRoundId && s.gross_score !== null))
+            const hasScore = myGroupPlayers.every((g) => scores.some((s) => s.player_id === g.player_id && s.hole_number === h && s.round_id === activeRoundId && s.gross_strokes !== null))
             return (
               <button
                 key={i}
@@ -325,7 +325,7 @@ export default function ScoringScreen({ setScreen }) {
               )}
 
               <div>
-                <p className="text-xs font-medium text-gray-600 mb-1.5 mt-2">Declaration</p>
+                <p className="text-xs font-medium text-gray-600 mb-1.5 mt-2">Declaration — tap to choose, then save</p>
                 <div className="grid grid-cols-2 gap-2">
                   {[
                     { id: DECLARATION.BLIND, label: 'Blind Wolf', sublabel: '4× — before hitting', color: 'purple' },
@@ -392,6 +392,9 @@ export default function ScoringScreen({ setScreen }) {
         >
           {allScoresIn ? 'Save All Scores →' : 'Save Scores'}
         </button>
+        {!myGroupPlayers.some((g) => draftScores[g.player_id] !== '') && (
+          <p className="text-xs text-gray-400 text-center -mt-2">Enter at least one score above to save</p>
+        )}
 
         {/* Hole summary if result known */}
         {currentHoleWh?.result && currentHoleWh.result !== 'push' && (
@@ -400,7 +403,7 @@ export default function ScoringScreen({ setScreen }) {
               {currentHoleWh.result === 'wolf_win' ? '🐺 Wolf wins!' : '🎯 Wolf loses!'}
             </div>
             <div className="text-xs text-gray-600 mt-0.5">
-              {(currentHoleWh.carry_value + currentHoleWh.base_value) * (MULTIPLIERS[currentHoleWh.declaration] || 1)} pts per player
+              {((currentHoleWh.carry_value || 0) + currentHoleWh.base_value) * (MULTIPLIERS[currentHoleWh.declaration] || 1)} pts per player
             </div>
           </div>
         )}

@@ -49,6 +49,11 @@ export default function LeaderboardScreen({ setScreen }) {
 // ── Stableford ─────────────────────────────────────────────────────────────
 
 function StablefordTab({ players, groupings, scores, courses, rounds }) {
+  const roundNumbers = useMemo(
+    () => rounds.map((r) => r.round_number).sort((a, b) => a - b),
+    [rounds]
+  )
+
   const playerTotals = useMemo(() => {
     const totals = {}
 
@@ -66,8 +71,8 @@ function StablefordTab({ players, groupings, scores, courses, rounds }) {
 
         for (const hole of holes) {
           const s = scores.find((sc) => sc.player_id === p.id && sc.hole_number === hole.hole_number && sc.round_id === round.id)
-          if (!s || s.gross_score === null) continue
-          const net = netScore(s.gross_score, p.handicap || 0, hole.stroke_index)
+          if (!s || s.gross_strokes === null) continue
+          const net = netScore(s.gross_strokes, p.handicap || 0, hole.stroke_index)
           const pts = stablefordPoints(net - hole.par)
           totals[p.id].rounds[round.round_number] = (totals[p.id].rounds[round.round_number] || 0) + pts
           totals[p.id].total += pts
@@ -94,7 +99,7 @@ function StablefordTab({ players, groupings, scores, courses, rounds }) {
           <div className="flex-1">
             <div className="font-semibold text-sm text-gray-900">{pt.player.name}</div>
             <div className="text-xs text-gray-400">
-              {[1, 2, 3].map((r) => `R${r}: ${pt.rounds[r] ?? '—'}`).join(' · ')}
+              {roundNumbers.map((r) => `R${r}: ${pt.rounds[r] ?? '—'}`).join(' · ')}
             </div>
           </div>
           <div className="text-xl font-bold text-green-700">{pt.total}</div>
@@ -113,8 +118,9 @@ function WolfTab({ players, groupings, wolfHoles, holes, activeRoundId }) {
     const deltas = {}
     const holeLog = []
 
-    for (let groupNum = 1; groupNum <= 2; groupNum++) {
-      const gPlayers = roundGroupings.filter((g) => g.group_number === groupNum).sort((a, b) => a.wolf_position - b.wolf_position)
+    const groupNums = [...new Set(roundGroupings.map((g) => g.group_number))].sort((a, b) => a - b)
+    for (const groupNum of groupNums) {
+      const gPlayers = roundGroupings.filter((g) => g.group_number === groupNum).sort((a, b) => a.wolf_order - b.wolf_order)
       if (!gPlayers.length) continue
 
       gPlayers.forEach((g) => (deltas[g.player_id] = deltas[g.player_id] || 0))
@@ -309,7 +315,8 @@ function SkinsTab({ players, groupings, scores, holes, activeRoundId }) {
 function NassauTab({ players, groupings, scores, holes, activeRoundId }) {
   const nassauData = useMemo(() => {
     const results = []
-    for (let groupNum = 1; groupNum <= 2; groupNum++) {
+    const groupNums = [...new Set(groupings.filter((g) => g.round_id === activeRoundId).map((g) => g.group_number))].sort((a, b) => a - b)
+    for (const groupNum of groupNums) {
       const roundGroupings = groupings
         .filter((g) => g.round_id === activeRoundId && g.group_number === groupNum)
         .map((g) => ({ ...g, player: players.find((p) => p.id === g.player_id) }))
@@ -372,7 +379,7 @@ function NassauTab({ players, groupings, scores, holes, activeRoundId }) {
 function ScorecardTab({ players, groupings, scores, holes, activeRoundId }) {
   const roundGroupings = groupings
     .filter((g) => g.round_id === activeRoundId)
-    .sort((a, b) => a.group_number - b.group_number || a.wolf_position - b.wolf_position)
+    .sort((a, b) => a.group_number - b.group_number || a.wolf_order - b.wolf_order)
     .map((g) => ({ ...g, player: players.find((p) => p.id === g.player_id) }))
 
   if (!roundGroupings.length || !holes.length) return <EmptyState message="No scorecard data yet." />
@@ -382,7 +389,7 @@ function ScorecardTab({ players, groupings, scores, holes, activeRoundId }) {
 
   return (
     <div className="overflow-x-auto">
-      {[1, 2].map((groupNum) => {
+      {[...new Set(roundGroupings.map((g) => g.group_number))].sort((a, b) => a - b).map((groupNum) => {
         const gPlayers = roundGroupings.filter((g) => g.group_number === groupNum)
         if (!gPlayers.length) return null
         return (
@@ -418,13 +425,13 @@ function ScorecardTab({ players, groupings, scores, holes, activeRoundId }) {
               <tbody>
                 {gPlayers.map((g) => {
                   const roundScores = scores.filter((s) => s.round_id === activeRoundId && s.player_id === g.player_id)
-                  const totalGross = roundScores.reduce((s, sc) => s + (sc.gross_score || 0), 0)
+                  const totalGross = roundScores.reduce((s, sc) => s + (sc.gross_strokes || 0), 0)
                   return (
                     <tr key={g.player_id} className="border-t border-gray-100">
                       <td className="px-2 py-1.5 font-medium text-gray-800 whitespace-nowrap">{g.player?.name?.split(' ')[0]}</td>
                       {holes.map((h) => {
                         const s = roundScores.find((sc) => sc.hole_number === h.hole_number)
-                        const gross = s?.gross_score
+                        const gross = s?.gross_strokes
                         const par = h.par
                         const diff = gross != null ? gross - par : null
                         return (

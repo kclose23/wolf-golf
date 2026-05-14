@@ -11,7 +11,7 @@ import Spinner from './components/Spinner'
 
 function AppInner() {
   const { state, actions } = useApp()
-  const { loading, tripId, playerId, players, rounds, activeRoundId } = state
+  const { loading, tripId, playerId, players, rounds, activeRoundId, isAdmin } = state
 
   // Screens outside the main tab nav
   const [overlayScreen, setOverlayScreen] = useState(null) // 'setup' | 'scan' | null
@@ -19,10 +19,7 @@ function AppInner() {
   const [mainScreen, setMainScreen] = useState('score')
 
   // Derived auth state
-  const isLoggedIn = Boolean(tripId && playerId)
   const hasPickedPlayer = Boolean(playerId)
-  const myPlayer = players.find((p) => p.id === playerId)
-  const isAdmin = myPlayer?.is_admin || false
 
   const activeRound = rounds.find((r) => r.id === activeRoundId)
   const hasActiveRound = Boolean(activeRoundId && activeRound)
@@ -54,7 +51,7 @@ function AppInner() {
   if (!hasPickedPlayer) {
     return <PlayerSelectScreen onSelected={(player) => {
       // If admin and no rounds, push to setup
-      if (player.is_admin && rounds.length === 0) setOverlayScreen('setup')
+      if (state.isAdmin && rounds.length === 0) setOverlayScreen('setup')
     }} />
   }
 
