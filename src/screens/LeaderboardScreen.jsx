@@ -9,8 +9,8 @@ import TabBar from '../components/TabBar'
 import BottomNav from '../components/BottomNav'
 
 const TABS = [
-  { id: 'stableford', label: 'Stableford' },
   { id: 'wolf', label: 'Wolf' },
+  { id: 'stableford', label: 'Stableford' },
   { id: 'skins', label: 'Skins' },
   { id: 'nassau', label: 'Nassau' },
   { id: 'overall', label: 'Scorecard' },
@@ -19,7 +19,7 @@ const TABS = [
 export default function LeaderboardScreen({ setScreen }) {
   const { state } = useApp()
   const { players, groupings, scores, wolfHoles, courses, rounds, activeRoundId } = state
-  const [tab, setTab] = useState('stableford')
+  const [tab, setTab] = useState('wolf')
 
   const activeRound = rounds.find((r) => r.id === activeRoundId)
   const course = courses.find((c) => c.round_number === activeRound?.round_number)
