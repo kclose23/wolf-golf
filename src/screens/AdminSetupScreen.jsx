@@ -5,10 +5,10 @@ import Layout from '../components/Layout'
 import Spinner from '../components/Spinner'
 
 const GROUP_COLORS = [
-  { bg: 'bg-green-50', text: 'text-green-800', btn: 'text-green-600' },
-  { bg: 'bg-blue-50',  text: 'text-blue-800',  btn: 'text-blue-600'  },
-  { bg: 'bg-purple-50', text: 'text-purple-800', btn: 'text-purple-600' },
-  { bg: 'bg-orange-50', text: 'text-orange-800', btn: 'text-orange-600' },
+  { bg: 'bg-green-900/40', text: 'text-green-400', btn: 'text-green-400' },
+  { bg: 'bg-blue-900/40',  text: 'text-blue-400',  btn: 'text-blue-400'  },
+  { bg: 'bg-purple-900/40', text: 'text-purple-400', btn: 'text-purple-400' },
+  { bg: 'bg-orange-900/40', text: 'text-orange-400', btn: 'text-orange-400' },
 ]
 
 export default function AdminSetupScreen({ onDone, onBack }) {
@@ -138,33 +138,33 @@ export default function AdminSetupScreen({ onDone, onBack }) {
       <Layout title="Setup Round" onBack={onBack}>
         <div className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Round Number</label>
+            <label className="block text-sm font-medium text-gray-400 mb-1">Round Number</label>
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setRoundNumber((n) => Math.max(1, n - 1))}
                 disabled={roundNumber <= 1}
-                className="w-10 h-10 rounded-lg border-2 border-gray-200 text-gray-600 font-bold text-xl disabled:opacity-30 flex items-center justify-center"
+                className="w-10 h-10 rounded-lg border-2 border-gray-700 text-gray-400 font-bold text-xl disabled:opacity-30 flex items-center justify-center"
               >
                 −
               </button>
-              <div className="flex-1 text-center py-2.5 rounded-lg border-2 border-green-600 bg-green-50 text-green-700 font-semibold text-lg">
+              <div className="flex-1 text-center py-2.5 rounded-lg border-2 border-green-600 bg-green-900/40 text-green-400 font-semibold text-lg">
                 Round {roundNumber}
               </div>
               <button
                 onClick={() => setRoundNumber((n) => n + 1)}
-                className="w-10 h-10 rounded-lg border-2 border-gray-200 text-gray-600 font-bold text-xl flex items-center justify-center"
+                className="w-10 h-10 rounded-lg border-2 border-gray-700 text-gray-400 font-bold text-xl flex items-center justify-center"
               >
                 +
               </button>
             </div>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Date</label>
+            <label className="block text-sm font-medium text-gray-400 mb-1">Date</label>
             <input
               type="date"
               value={date}
               onChange={(e) => setDate(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-green-500"
+              className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-green-500"
             />
           </div>
           <button
@@ -188,7 +188,7 @@ export default function AdminSetupScreen({ onDone, onBack }) {
         <div className="space-y-4">
 
           {/* Add player inline */}
-          <form onSubmit={handleAddPlayer} className="bg-white rounded-xl border border-gray-200 p-4 space-y-3">
+          <form onSubmit={handleAddPlayer} className="bg-gray-800 rounded-xl border border-gray-700 p-4 space-y-3">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Add Player to Trip</p>
             <div className="flex gap-2">
               <input
@@ -196,7 +196,7 @@ export default function AdminSetupScreen({ onDone, onBack }) {
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="Name"
-                className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                className="flex-1 bg-gray-700 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500 placeholder-gray-500"
               />
               <input
                 type="number"
@@ -205,7 +205,7 @@ export default function AdminSetupScreen({ onDone, onBack }) {
                 placeholder="Hdcp"
                 min="0"
                 max="54"
-                className="w-16 border border-gray-300 rounded-lg px-3 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-green-500"
+                className="w-16 bg-gray-700 border border-gray-600 text-white rounded-lg px-3 py-2 text-sm text-center focus:outline-none focus:ring-2 focus:ring-green-500"
               />
               <button
                 type="submit"
@@ -225,9 +225,9 @@ export default function AdminSetupScreen({ onDone, onBack }) {
               </p>
               <div className="flex flex-wrap gap-2">
                 {unassigned.map((p) => (
-                  <div key={p.id} className="bg-gray-100 rounded-full px-3 py-1.5 text-sm flex items-center gap-1.5">
-                    <span className="font-medium">{p.name}</span>
-                    <span className="text-gray-400">→</span>
+                  <div key={p.id} className="bg-gray-700 rounded-full px-3 py-1.5 text-sm flex items-center gap-1.5">
+                    <span className="font-medium text-gray-200">{p.name}</span>
+                    <span className="text-gray-500">→</span>
                     {groups.map((_, gi) => {
                       const c = GROUP_COLORS[gi % GROUP_COLORS.length]
                       return (
@@ -251,28 +251,28 @@ export default function AdminSetupScreen({ onDone, onBack }) {
           {groups.map((group, gi) => {
             const c = GROUP_COLORS[gi % GROUP_COLORS.length]
             return (
-              <div key={gi} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <div key={gi} className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
                 <div className={`px-4 py-2 flex items-center justify-between text-sm font-semibold ${c.bg} ${c.text}`}>
                   <span>Group {gi + 1} ({group.length}/4)</span>
                   {groups.length > 1 && group.length === 0 && (
                     <button onClick={() => removeGroup(gi)} className="text-xs text-red-400 font-medium">Remove</button>
                   )}
                 </div>
-                <div className="divide-y divide-gray-100">
+                <div className="divide-y divide-gray-700">
                   {group.map((pid) => {
                     const p = players.find((pl) => pl.id === pid)
                     return (
                       <div key={pid} className="flex items-center justify-between px-4 py-3">
                         <div>
-                          <span className="text-sm font-medium">{p?.name}</span>
-                          <span className="text-xs text-gray-400 ml-2">Hdcp {p?.handicap ?? 0}</span>
+                          <span className="text-sm font-medium text-gray-200">{p?.name}</span>
+                          <span className="text-xs text-gray-500 ml-2">Hdcp {p?.handicap ?? 0}</span>
                         </div>
                         <button onClick={() => assignPlayer(pid, -1)} className="text-red-400 text-xs">Remove</button>
                       </div>
                     )
                   })}
                   {group.length === 0 && (
-                    <p className="px-4 py-3 text-sm text-gray-400 italic">Empty</p>
+                    <p className="px-4 py-3 text-sm text-gray-500 italic">Empty</p>
                   )}
                 </div>
               </div>
@@ -282,12 +282,12 @@ export default function AdminSetupScreen({ onDone, onBack }) {
           {/* Add group */}
           <button
             onClick={addGroup}
-            className="w-full border-2 border-dashed border-gray-300 text-gray-500 py-2.5 rounded-xl text-sm font-medium hover:border-gray-400 transition-colors"
+            className="w-full border-2 border-dashed border-gray-700 text-gray-500 py-2.5 rounded-xl text-sm font-medium hover:border-gray-600 transition-colors"
           >
             + Add Group
           </button>
 
-          {error && <p className="text-red-500 text-sm">{error}</p>}
+          {error && <p className="text-red-400 text-sm">{error}</p>}
 
           <button
             onClick={() => { initWolfOrder(); setStep('wolforder') }}
@@ -297,7 +297,7 @@ export default function AdminSetupScreen({ onDone, onBack }) {
             Next: Wolf Order →
           </button>
           {!groupsFull && (
-            <p className="text-xs text-gray-400 text-center">Each group needs at least 2 players to continue</p>
+            <p className="text-xs text-gray-500 text-center">Each group needs at least 2 players to continue</p>
           )}
         </div>
       </Layout>
@@ -317,26 +317,26 @@ export default function AdminSetupScreen({ onDone, onBack }) {
           {groups.map((_, gi) => {
             const c = GROUP_COLORS[gi % GROUP_COLORS.length]
             return (
-              <div key={gi} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+              <div key={gi} className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
                 <div className={`px-4 py-2 flex items-center justify-between text-sm font-semibold ${c.bg} ${c.text}`}>
                   <span>Group {gi + 1} Wolf Order</span>
                   <button
                     onClick={() => shuffleWolf(gi)}
-                    className="text-xs font-medium px-2 py-1 rounded bg-white/60 hover:bg-white transition-colors"
+                    className="text-xs font-medium px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 transition-colors text-gray-300"
                   >
                     🎲 Randomize
                   </button>
                 </div>
-                <div className="divide-y divide-gray-100">
+                <div className="divide-y divide-gray-700">
                   {wolfOrder[gi].map((pid, idx) => {
                     const p = players.find((pl) => pl.id === pid)
                     return (
                       <div key={pid} className="flex items-center gap-3 px-4 py-3">
                         <span className={`w-6 h-6 rounded-full text-xs flex items-center justify-center font-bold
-                          ${idx === 0 ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-500'}`}>
+                          ${idx === 0 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-gray-700 text-gray-400'}`}>
                           {idx + 1}
                         </span>
-                        <span className="flex-1 text-sm font-medium">{p?.name}</span>
+                        <span className="flex-1 text-sm font-medium text-gray-200">{p?.name}</span>
                         <div className="flex gap-1">
                           <button
                             onClick={() => idx > 0 && moveWolf(gi, idx, idx - 1)}
@@ -361,7 +361,7 @@ export default function AdminSetupScreen({ onDone, onBack }) {
             )
           })}
 
-          {error && <p className="text-red-500 text-sm">{error}</p>}
+          {error && <p className="text-red-400 text-sm">{error}</p>}
 
           <button
             onClick={handleSave}

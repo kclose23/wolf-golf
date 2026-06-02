@@ -1,23 +1,40 @@
-export default function BottomNav({ screen, setScreen, isScorer }) {
+import { useApp } from '../context/AppContext'
+
+export default function BottomNav({ screen, setScreen }) {
+  const { actions } = useApp()
+
   const tabs = [
     { id: 'score', label: 'Score', icon: '⛳' },
     { id: 'leaderboard', label: 'Leaderboard', icon: '🏆' },
     { id: 'settlement', label: 'Pay Up', icon: '💵' },
   ]
 
+  function handleLeave() {
+    if (confirm('Leave this trip? Your session will be cleared and you can rejoin with the code.')) {
+      actions.clearSession()
+    }
+  }
+
   return (
-    <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 flex z-50 safe-bottom">
+    <nav className="fixed bottom-0 left-0 right-0 bg-gray-900 border-t border-gray-800 flex z-50 safe-bottom">
       {tabs.map((tab) => (
         <button
           key={tab.id}
           onClick={() => setScreen(tab.id)}
           className={`flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium transition-colors
-            ${screen === tab.id ? 'text-green-600' : 'text-gray-400'}`}
+            ${screen === tab.id ? 'text-green-400' : 'text-gray-500'}`}
         >
           <span className="text-xl leading-none">{tab.icon}</span>
           <span>{tab.label}</span>
         </button>
       ))}
+      <button
+        onClick={handleLeave}
+        className="flex-1 flex flex-col items-center gap-0.5 py-3 text-xs font-medium text-gray-500 transition-colors hover:text-red-400"
+      >
+        <span className="text-xl leading-none">🚪</span>
+        <span>Leave</span>
+      </button>
     </nav>
   )
 }

@@ -1,15 +1,27 @@
 // ── Net score helpers ──────────────────────────────────────────────────────
 
-export function strokesReceived(handicap, strokeIndex) {
+// Convert a hole's absolute stroke index to its relative rank within the set of
+// holes being played. For a 9-hole round the back-9 SI=2 hole becomes rank 1.
+export function effectiveStrokeIndex(holeStrokeIndex, allHoles) {
+  if (!allHoles || allHoles.length === 0) return holeStrokeIndex
+  const sorted = allHoles
+    .filter((h) => h.stroke_index != null)
+    .map((h) => h.stroke_index)
+    .sort((a, b) => a - b)
+  const rank = sorted.indexOf(holeStrokeIndex) + 1
+  return rank > 0 ? rank : sorted.length
+}
+
+export function strokesReceived(handicap, strokeIndex, totalHoles = 18) {
   // How many strokes a player receives on a given hole
   if (handicap <= 0) return 0
-  let strokes = Math.floor(handicap / 18)
-  if (handicap % 18 >= strokeIndex) strokes += 1
+  let strokes = Math.floor(handicap / totalHoles)
+  if (handicap % totalHoles >= strokeIndex) strokes += 1
   return strokes
 }
 
-export function netScore(grossScore, handicap, strokeIndex) {
-  return grossScore - strokesReceived(handicap, strokeIndex)
+export function netScore(grossScore, handicap, strokeIndex, totalHoles = 18) {
+  return grossScore - strokesReceived(handicap, strokeIndex, totalHoles)
 }
 
 // ── Stableford ─────────────────────────────────────────────────────────────
@@ -42,7 +54,8 @@ export function calcStableford(scores, groupings, courses) {
       const hole = holes.find((h) => h.hole_number === score.hole_number)
       if (!hole) continue
 
-      const net = netScore(score.gross_strokes, player.player.handicap, hole.stroke_index)
+      const esi = effectiveStrokeIndex(hole.stroke_index, holes)
+      const net = netScore(score.gross_strokes, player.player.handicap, esi, holes.length)
       const pts = stablefordPoints(net - hole.par)
 
       if (!playerTotals[score.player_id]) {
@@ -65,6 +78,7 @@ export const DECLARATION = {
   EARLY: 'early',   // 3× (after own shot, before others)
   LATE: 'late',     // 2× (after all hit)
   PARTNER: 'partner', // 1× (picked a partner)
+  THREW: 'threw',   // 2× (partner threw the wolf, goes alone vs 3 others)
 }
 
 export const MULTIPLIERS = {
@@ -72,6 +86,7 @@ export const MULTIPLIERS = {
   early: 3,
   late: 2,
   partner: 1,
+  threw: 2,
 }
 
 export function wolfPlayerForHole(holeNumber, wolfOrder, groupPoints, isComeback) {
@@ -126,6 +141,18 @@ export function calcWolfPoints(wolfHoles, scores, groupings, holes, groupNumber)
         if (partnerId) deltas[partnerId] -= pot * losers.length
         losers.forEach((id) => (deltas[id] += pot * 2))
       }
+    } else if (wh.declaration === DECLARATION.THREW) {
+      // Partner threw the wolf — thrower (partner_player_id) goes solo vs 3 others
+      const throwerId = wh.partner_player_id
+      const others = playerIds.filter((id) => id !== throwerId)
+
+      if (wh.result === 'wolf_win') {
+        if (throwerId) deltas[throwerId] += pot * others.length
+        others.forEach((id) => (deltas[id] -= pot))
+      } else {
+        if (throwerId) deltas[throwerId] -= pot * others.length
+        others.forEach((id) => (deltas[id] += pot))
+      }
     } else {
       // Solo: wolf vs other 3
       const wolfId = wh.wolf_player_id
@@ -159,6 +186,15 @@ export function determineWolfResult(wolfHole, netScores) {
     if (bestA < bestB) return 'wolf_win'
     if (bestA > bestB) return 'wolf_lose'
     return 'push'
+  } else if (wolfHole.declaration === DECLARATION.THREW && partnerId) {
+    // Partner threw the wolf — partner goes solo vs all 3 (including wolf)
+    const throwerNet = netScores[partnerId] ?? 99
+    const others = Object.entries(netScores).filter(([id]) => id !== partnerId)
+    const anyOtherBeats = others.some(([, net]) => net < throwerNet)
+    if (anyOtherBeats) return 'wolf_lose'
+    const anyTie = others.some(([, net]) => net === throwerNet)
+    if (anyTie) return 'push'
+    return 'wolf_win'
   } else {
     // Solo: if ANY of the 3 others beats wolf → wolf loses
     const wolfNet = netScores[wolfId] ?? 99
@@ -198,7 +234,8 @@ export function calcSkins(scores, groupings, holes, dollarPerSkin = 1) {
         const g = groupings.find((g) => g.player_id === pid)
         const s = scores.find((s) => s.player_id === pid && s.hole_number === hole)
         if (!s || s.gross_strokes === null) return null
-        const net = netScore(s.gross_strokes, g?.player?.handicap || 0, holeData.stroke_index)
+        const esi = effectiveStrokeIndex(holeData.stroke_index, holes)
+        const net = netScore(s.gross_strokes, g?.player?.handicap || 0, esi, holes.length)
         return { playerId: pid, net }
       })
       .filter(Boolean)
@@ -253,7 +290,8 @@ export function calcNassau(scores, groupings, holes, groupNumber) {
       const g = groupPlayers.find((g) => g.player_id === pid)
       const s = scores.find((sc) => sc.player_id === pid && sc.hole_number === hole)
       if (!s || s.gross_strokes === null) continue
-      const net = netScore(s.gross_strokes, g?.player?.handicap || 0, holeData.stroke_index)
+      const esi = effectiveStrokeIndex(holeData.stroke_index, holes)
+      const net = netScore(s.gross_strokes, g?.player?.handicap || 0, esi, holes.length)
       netTotals[pid][segment] += net
       netTotals[pid].total += net
     }

@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useReducer, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
-import { getTripByCode, loadTripData, getPlayers, getGroupings, getScores, getWolfHoles } from '../lib/db'
+import { getTripByCode, getTrip, loadTripData, getPlayers, getGroupings, getScores, getWolfHoles } from '../lib/db'
 import { flushQueue } from '../lib/offline'
 
 const AppContext = createContext(null)
@@ -25,14 +25,16 @@ function loadLocal() {
 
 const initialState = {
   ...loadLocal(),
+  user: null,
+  authLoading: true,
   trip: null,
   players: [],
   courses: [],
   rounds: [],
   payments: [],
-  groupings: [],     // for active round
-  scores: [],        // for active round
-  wolfHoles: [],     // for active round
+  groupings: [],
+  scores: [],
+  wolfHoles: [],
   loading: true,
   error: null,
 }
@@ -85,9 +87,17 @@ function reducer(state, action) {
     }
     case 'SET_PLAYERS': return { ...state, players: action.players }
     case 'SET_PAYMENTS': return { ...state, payments: action.payments }
+    case 'SET_USER':
+      return { ...state, user: action.user, authLoading: false }
     case 'CLEAR_SESSION': {
       Object.values(LOCAL_KEYS).forEach((k) => localStorage.removeItem(k))
-      return { ...initialState, ...loadLocal(), loading: false }
+      return {
+        ...state,
+        joinCode: '', tripId: '', playerId: '', activeRoundId: '', isAdmin: false,
+        trip: null, players: [], courses: [], rounds: [], payments: [],
+        groupings: [], scores: [], wolfHoles: [],
+        loading: false,
+      }
     }
     default: return state
   }
@@ -109,8 +119,10 @@ export function AppProvider({ children }) {
   const loadTrip = useCallback(async (tripId, roundId) => {
     dispatch({ type: 'SET_LOADING', value: true })
     try {
-      const { players, courses, rounds, payments } = await loadTripData(tripId)
-      const trip = { id: tripId }
+      const [trip, { players, courses, rounds, payments }] = await Promise.all([
+        getTrip(tripId),
+        loadTripData(tripId),
+      ])
 
       const activeRound = roundId
         ? rounds.find((r) => r.id === roundId)
@@ -126,6 +138,17 @@ export function AppProvider({ children }) {
       dispatch({ type: 'SET_ERROR', value: e.message })
     }
   }, [loadRoundData])
+
+  // Auth initialization
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      dispatch({ type: 'SET_USER', user: session?.user || null })
+    })
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      dispatch({ type: 'SET_USER', user: session?.user || null })
+    })
+    return () => subscription.unsubscribe()
+  }, [])
 
   // Initial load from localStorage
   useEffect(() => {
@@ -205,6 +228,11 @@ export function AppProvider({ children }) {
       dispatch({ type: 'UPSERT_WOLF_HOLE', wolfHole })
     },
     clearSession() {
+      dispatch({ type: 'CLEAR_SESSION' })
+    },
+    async signOut() {
+      localStorage.removeItem('wolf_golf_skip_auth')
+      await supabase.auth.signOut()
       dispatch({ type: 'CLEAR_SESSION' })
     },
   }

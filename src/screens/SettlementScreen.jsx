@@ -8,6 +8,8 @@ import Layout from '../components/Layout'
 import BottomNav from '../components/BottomNav'
 import Spinner from '../components/Spinner'
 
+const ALL_GAMES = ['Wolf', 'Skins', 'Nassau']
+
 export default function SettlementScreen({ setScreen }) {
   const { state, actions } = useApp()
   const { players, groupings, scores, wolfHoles, courses, rounds, payments, tripId, activeRoundId } = state
@@ -15,76 +17,100 @@ export default function SettlementScreen({ setScreen }) {
   const trip = state.trip
   const dollarPerPoint = trip?.dollar_per_point || 1
 
+  // ── Game opt-in toggles (persisted per trip) ───────────────────────────
+  const gamesKey = `wolf_golf_active_games_${tripId}`
+  const [activeGames, setActiveGames] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(gamesKey))
+      if (Array.isArray(saved)) return new Set(saved)
+    } catch {}
+    return new Set(ALL_GAMES) // default all on
+  })
+
+  function toggleGame(game) {
+    setActiveGames((prev) => {
+      const next = new Set(prev)
+      next.has(game) ? next.delete(game) : next.add(game)
+      localStorage.setItem(gamesKey, JSON.stringify([...next]))
+      return next
+    })
+  }
+
   // ── Compute all debts ──────────────────────────────────────────────────
 
   const rawDebts = useMemo(() => {
-    const debts = [] // { from, to, amount, game, description }
+    const debts = [] // { from, to, amount, game, gameType }
 
-    // Wolf (per round, per group)
+    // Wolf (per round, per group) — pairwise: each player pays each player above them the point difference
     for (const round of rounds) {
       const course = courses.find((c) => c.round_number === round.round_number)
-      const holes = course?.holes || []
-      for (let groupNum = 1; groupNum <= 2; groupNum++) {
-        const gGroupings = groupings
-          .filter((g) => g.round_id === round.id && g.group_number === groupNum)
-          .map((g) => ({ ...g, player: players.find((p) => p.id === g.player_id) }))
+      const holes = (course?.holes || []).sort((a, b) => a.hole_number - b.hole_number)
+      const holeCount = holes.length || 18
+
+      const groupNums = [...new Set(
+        groupings.filter((g) => g.round_id === round.id).map((g) => g.group_number)
+      )].sort((a, b) => a - b)
+
+      for (const groupNum of groupNums) {
+        const gGroupings = groupings.filter((g) => g.round_id === round.id && g.group_number === groupNum)
         if (!gGroupings.length) continue
 
         const gIds = gGroupings.map((g) => g.player_id)
-        const gDeltas = Object.fromEntries(gIds.map((id) => [id, 0]))
+        const gPoints = Object.fromEntries(gIds.map((id) => [id, 0]))
+        const roundWolfHoles = wolfHoles.filter((w) => w.round_id === round.id && w.group_number === groupNum)
         let carry = 0
 
-        const roundWolfHoles = wolfHoles.filter((w) => w.round_id === round.id && w.group_number === groupNum)
-        const holeCount = holes.length || 18
-
-        for (let hole = 1; hole <= holeCount; hole++) {
+        for (let hi = 0; hi < holeCount; hi++) {
+          const hole = holes.length > 0 ? (holes[hi]?.hole_number ?? hi + 1) : hi + 1
+          const isComebackHole = hi >= holeCount - 4
           const wh = roundWolfHoles.find((w) => w.hole_number === hole)
-          if (!wh || !wh.result) { carry += wh?.base_value || 1; continue }
-
+          if (!wh || !wh.result) {
+            carry = isComebackHole ? 0 : carry + (wh?.base_value || 1)
+            continue
+          }
           const effectiveVal = carry + wh.base_value
-          const mult = MULTIPLIERS[wh.declaration] || 1
-          const pot = effectiveVal * mult
-
-          if (wh.result === 'push') { carry += wh.base_value; continue }
+          const pot = effectiveVal * (MULTIPLIERS[wh.declaration] || 1)
+          if (wh.result === 'push') { carry = isComebackHole ? 0 : carry + wh.base_value; continue }
           carry = 0
 
+          // Additive model: winners get +pot each, losers get 0
           if (wh.declaration === DECLARATION.PARTNER) {
-            const winners = [wh.wolf_player_id, wh.partner_player_id].filter(Boolean)
-            const losers = gIds.filter((id) => !winners.includes(id))
-            if (wh.result === 'wolf_win') {
-              winners.forEach((id) => (gDeltas[id] += pot * losers.length))
-              losers.forEach((id) => (gDeltas[id] -= pot * winners.length))
-            } else {
-              winners.forEach((id) => (gDeltas[id] -= pot * losers.length))
-              losers.forEach((id) => (gDeltas[id] += pot * winners.length))
-            }
+            const wolfTeam = [wh.wolf_player_id, wh.partner_player_id].filter(Boolean)
+            const others = gIds.filter((id) => !wolfTeam.includes(id))
+            const winners = wh.result === 'wolf_win' ? wolfTeam : others
+            winners.forEach((id) => { if (id in gPoints) gPoints[id] += pot })
+          } else if (wh.declaration === DECLARATION.THREW) {
+            const throwerId = wh.partner_player_id
+            const others = gIds.filter((id) => id !== throwerId)
+            const winners = wh.result === 'wolf_win'
+              ? (throwerId ? [throwerId] : [])
+              : others
+            winners.forEach((id) => { if (id in gPoints) gPoints[id] += pot })
           } else {
-            const others = gIds.filter((id) => id !== wh.wolf_player_id)
-            if (wh.result === 'wolf_win') {
-              gDeltas[wh.wolf_player_id] += pot * others.length
-              others.forEach((id) => (gDeltas[id] -= pot))
-            } else {
-              gDeltas[wh.wolf_player_id] -= pot * others.length
-              others.forEach((id) => (gDeltas[id] += pot))
-            }
+            const winners = wh.result === 'wolf_win'
+              ? [wh.wolf_player_id]
+              : gIds.filter((id) => id !== wh.wolf_player_id)
+            winners.forEach((id) => { if (id in gPoints) gPoints[id] += pot })
           }
         }
 
-        // Convert deltas to pairwise debts
-        const creditors = Object.entries(gDeltas).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1])
-        const debtors = Object.entries(gDeltas).filter(([, v]) => v < 0).sort((a, b) => a[1] - b[1])
-        let ci = 0, di = 0
-        while (ci < creditors.length && di < debtors.length) {
-          const [cid, camt] = creditors[ci]
-          const [did, damt] = debtors[di]
-          const pay = Math.min(camt, -damt) * dollarPerPoint
-          if (pay > 0.01) {
-            debts.push({ from: did, to: cid, amount: Math.round(pay * 100) / 100, game: `Wolf R${round.round_number} G${groupNum}` })
+        // Each lower-point player pays each higher-point player the difference × dollar_per_point
+        const ranked = Object.entries(gPoints).sort((a, b) => b[1] - a[1])
+        for (let i = 0; i < ranked.length; i++) {
+          for (let j = i + 1; j < ranked.length; j++) {
+            const [highId, highPts] = ranked[i]
+            const [lowId, lowPts] = ranked[j]
+            const diff = highPts - lowPts
+            if (diff > 0.01) {
+              debts.push({
+                from: lowId,
+                to: highId,
+                amount: Math.round(diff * dollarPerPoint * 100) / 100,
+                game: `Wolf R${round.round_number} G${groupNum}`,
+                gameType: 'Wolf',
+              })
+            }
           }
-          creditors[ci] = [cid, camt - pay / dollarPerPoint]
-          debtors[di] = [did, damt + pay / dollarPerPoint]
-          if (creditors[ci][1] < 0.01) ci++
-          if (-debtors[di][1] < 0.01) di++
         }
       }
     }
@@ -110,7 +136,7 @@ export default function SettlementScreen({ setScreen }) {
         const losers = roundGroupings.map((g) => g.player_id).filter((id) => id !== winnerId)
         const perLoser = Math.round((skinCount * dollarPerPoint * numPlayers) / losers.length * 100) / 100
         losers.forEach((lid) => {
-          debts.push({ from: lid, to: winnerId, amount: perLoser, game: `Skins R${round.round_number}` })
+          debts.push({ from: lid, to: winnerId, amount: perLoser, game: `Skins R${round.round_number}`, gameType: 'Skins' })
         })
       }
     }
@@ -136,7 +162,7 @@ export default function SettlementScreen({ setScreen }) {
           if (!winnerId) continue
           const losers = roundGroupings.map((g) => g.player_id).filter((id) => id !== winnerId)
           losers.forEach((lid) => {
-            debts.push({ from: lid, to: winnerId, amount: nassauBet, game: `Nassau ${label} R${round.round_number} G${groupNum}` })
+            debts.push({ from: lid, to: winnerId, amount: nassauBet, game: `Nassau ${label} R${round.round_number} G${groupNum}`, gameType: 'Nassau' })
           })
         }
       }
@@ -145,10 +171,10 @@ export default function SettlementScreen({ setScreen }) {
     return debts
   }, [rounds, groupings, scores, wolfHoles, courses, players, payments, dollarPerPoint])
 
-  // Net debts: consolidate same from/to pairs, then subtract what's been paid
+  // Net debts: filter by opted-in games, consolidate same from/to pairs, then subtract paid
   const netDebts = useMemo(() => {
     const pairMap = {}
-    for (const d of rawDebts) {
+    for (const d of rawDebts.filter((d) => activeGames.has(d.gameType))) {
       const key = [d.from, d.to].sort().join(':')
       if (!pairMap[key]) pairMap[key] = { ids: [d.from, d.to], net: 0 }
       pairMap[key].net += (d.from === pairMap[key].ids[0] ? 1 : -1) * d.amount
@@ -169,7 +195,7 @@ export default function SettlementScreen({ setScreen }) {
       result.push({ from, to, total: amount, paid, remaining })
     }
     return result.sort((a, b) => b.remaining - a.remaining)
-  }, [rawDebts, payments])
+  }, [rawDebts, payments, activeGames])
 
   const [paying, setPaying] = useState(null) // { from, to, amount }
   const [payAmount, setPayAmount] = useState('')
@@ -199,18 +225,35 @@ export default function SettlementScreen({ setScreen }) {
   const totalOwed = netDebts.reduce((s, d) => s + Math.max(0, d.remaining), 0)
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col max-w-md mx-auto">
-      <header className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-40">
-        <h1 className="text-base font-semibold text-gray-900">Pay Up</h1>
+    <div className="min-h-screen bg-gray-900 flex flex-col max-w-md mx-auto">
+      <header className="bg-gray-900 border-b border-gray-800 px-4 py-3 sticky top-0 z-40">
+        <h1 className="text-base font-semibold text-white">Pay Up</h1>
         <p className="text-xs text-gray-400">${dollarPerPoint}/pt · Total outstanding: ${totalOwed.toFixed(2)}</p>
       </header>
+
+      {/* Game opt-in toggles */}
+      <div className="px-4 py-3 bg-gray-900 border-b border-gray-800 flex gap-2">
+        {ALL_GAMES.map((game) => {
+          const on = activeGames.has(game)
+          return (
+            <button
+              key={game}
+              onClick={() => toggleGame(game)}
+              className={`flex-1 py-1.5 rounded-lg text-xs font-semibold border-2 transition-colors
+                ${on ? 'bg-green-600 border-green-600 text-white' : 'bg-gray-800 border-gray-700 text-gray-500'}`}
+            >
+              {game}
+            </button>
+          )
+        })}
+      </div>
 
       <div className="flex-1 p-4 pb-28 space-y-3">
         {netDebts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="text-4xl mb-3">🎉</div>
-            <p className="font-semibold text-gray-700">All square!</p>
-            <p className="text-sm text-gray-400 mt-1">No outstanding debts.</p>
+            <p className="font-semibold text-white">All square!</p>
+            <p className="text-sm text-gray-500 mt-1">No outstanding debts.</p>
           </div>
         ) : (
           netDebts.map((debt, i) => {
@@ -219,10 +262,10 @@ export default function SettlementScreen({ setScreen }) {
             const settled = debt.remaining <= 0.01
 
             return (
-              <div key={i} className={`bg-white rounded-xl border overflow-hidden ${settled ? 'border-green-200 opacity-60' : 'border-gray-200'}`}>
+              <div key={i} className={`bg-gray-800 rounded-xl border overflow-hidden ${settled ? 'border-green-900 opacity-60' : 'border-gray-700'}`}>
                 <div className="px-4 py-3 flex items-center gap-3">
                   <div className="flex-1">
-                    <div className="text-sm font-semibold text-gray-900">
+                    <div className="text-sm font-semibold text-white">
                       {fromP?.name} → {toP?.name}
                     </div>
                     {debt.paid > 0 && (
@@ -232,7 +275,7 @@ export default function SettlementScreen({ setScreen }) {
                     )}
                   </div>
                   <div className="text-right">
-                    <div className={`text-lg font-bold ${settled ? 'text-green-600' : 'text-gray-900'}`}>
+                    <div className={`text-lg font-bold ${settled ? 'text-green-400' : 'text-white'}`}>
                       {settled ? '✓' : `$${debt.remaining.toFixed(2)}`}
                     </div>
                   </div>
@@ -254,21 +297,21 @@ export default function SettlementScreen({ setScreen }) {
 
         {/* Breakdown */}
         {rawDebts.length > 0 && (
-          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mt-4">
-            <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide bg-gray-50">
+          <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden mt-4">
+            <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide bg-gray-700">
               Breakdown
             </div>
-            <div className="divide-y divide-gray-100">
+            <div className="divide-y divide-gray-700">
               {rawDebts.map((d, i) => {
                 const fromP = players.find((p) => p.id === d.from)
                 const toP = players.find((p) => p.id === d.to)
                 return (
                   <div key={i} className="px-4 py-2.5 flex justify-between items-center">
                     <div>
-                      <span className="text-sm font-medium">{fromP?.name?.split(' ')[0]} → {toP?.name?.split(' ')[0]}</span>
-                      <div className="text-xs text-gray-400">{d.game}</div>
+                      <span className="text-sm font-medium text-white">{fromP?.name?.split(' ')[0]} → {toP?.name?.split(' ')[0]}</span>
+                      <div className="text-xs text-gray-500">{d.game}</div>
                     </div>
-                    <span className="text-sm font-semibold text-gray-700">${d.amount.toFixed(2)}</span>
+                    <span className="text-sm font-semibold text-gray-300">${d.amount.toFixed(2)}</span>
                   </div>
                 )
               })}
@@ -279,24 +322,24 @@ export default function SettlementScreen({ setScreen }) {
 
       {/* Pay modal */}
       {paying && (
-        <div className="fixed inset-0 bg-black/50 flex items-end z-50">
-          <div className="bg-white rounded-t-2xl w-full max-w-md mx-auto p-6 space-y-4">
-            <h2 className="text-lg font-bold text-gray-900">Mark Payment</h2>
-            <p className="text-sm text-gray-500">
+        <div className="fixed inset-0 bg-black/70 flex items-end z-50">
+          <div className="bg-gray-800 rounded-t-2xl w-full max-w-md mx-auto p-6 space-y-4">
+            <h2 className="text-lg font-bold text-white">Mark Payment</h2>
+            <p className="text-sm text-gray-400">
               {players.find((p) => p.id === paying.from)?.name} pays {players.find((p) => p.id === paying.to)?.name}
             </p>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Amount ($)</label>
+              <label className="block text-sm font-medium text-gray-400 mb-1">Amount ($)</label>
               <input
                 type="number"
                 value={payAmount}
                 onChange={(e) => setPayAmount(e.target.value)}
                 step="0.01"
-                className="w-full border border-gray-300 rounded-lg px-4 py-3 text-xl font-bold focus:outline-none focus:ring-2 focus:ring-green-500"
+                className="w-full bg-gray-700 border border-gray-600 text-white rounded-xl px-4 py-3 text-xl font-bold focus:outline-none focus:ring-2 focus:ring-green-500"
               />
             </div>
             <div className="flex gap-3">
-              <button onClick={() => setPaying(null)} className="flex-1 border border-gray-200 rounded-lg py-3 font-medium text-gray-600">
+              <button onClick={() => setPaying(null)} className="flex-1 border border-gray-600 rounded-xl py-3 font-medium text-gray-300">
                 Cancel
               </button>
               <button onClick={confirmPay} className="flex-1 bg-green-600 text-white rounded-lg py-3 font-semibold">

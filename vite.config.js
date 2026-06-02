@@ -14,12 +14,11 @@ export default defineConfig({
         short_name: 'Wolf Golf',
         description: 'Golf trip score tracker',
         theme_color: '#16a34a',
-        background_color: '#ffffff',
+        background_color: '#111827',
         display: 'standalone',
         orientation: 'portrait',
         icons: [
-          { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
-          { src: '/icon-512.png', sizes: '512x512', type: 'image/png' }
+          { src: '/logo.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }
         ]
       }
     })

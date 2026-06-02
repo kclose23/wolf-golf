@@ -1,7 +1,7 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { useApp } from '../context/AppContext'
 import {
-  netScore, stablefordPoints, strokesReceived,
+  netScore, stablefordPoints, strokesReceived, effectiveStrokeIndex,
   MULTIPLIERS, DECLARATION, determineWolfResult, calcSkins, skinsTotals, calcNassau,
 } from '../lib/gameEngine'
 import Layout from '../components/Layout'
@@ -26,9 +26,9 @@ export default function LeaderboardScreen({ setScreen }) {
   const holes = useMemo(() => (course?.holes || []).sort((a, b) => a.hole_number - b.hole_number), [course])
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col max-w-md mx-auto">
-      <header className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-40">
-        <h1 className="text-base font-semibold text-gray-900">Leaderboard</h1>
+    <div className="min-h-screen bg-gray-900 flex flex-col max-w-md mx-auto">
+      <header className="bg-gray-900 border-b border-gray-800 px-4 py-3 sticky top-0 z-40">
+        <h1 className="text-base font-semibold text-white">Leaderboard</h1>
       </header>
 
       <TabBar tabs={TABS} active={tab} onChange={setTab} />
@@ -72,7 +72,8 @@ function StablefordTab({ players, groupings, scores, courses, rounds }) {
         for (const hole of holes) {
           const s = scores.find((sc) => sc.player_id === p.id && sc.hole_number === hole.hole_number && sc.round_id === round.id)
           if (!s || s.gross_strokes === null) continue
-          const net = netScore(s.gross_strokes, p.handicap || 0, hole.stroke_index)
+          const esi = effectiveStrokeIndex(hole.stroke_index, holes)
+          const net = netScore(s.gross_strokes, p.handicap || 0, esi, holes.length)
           const pts = stablefordPoints(net - hole.par)
           totals[p.id].rounds[round.round_number] = (totals[p.id].rounds[round.round_number] || 0) + pts
           totals[p.id].total += pts
@@ -91,18 +92,18 @@ function StablefordTab({ players, groupings, scores, courses, rounds }) {
         Trip champion · Higher is better · Eagle=4 Birdie=3 Par=2 Bogey=1 Double=0
       </p>
       {playerTotals.map((pt, i) => (
-        <div key={pt.player.id} className="bg-white rounded-xl border border-gray-200 px-4 py-3 flex items-center gap-3">
+        <div key={pt.player.id} className="bg-gray-800 rounded-xl border border-gray-700 px-4 py-3 flex items-center gap-3">
           <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold
-            ${i === 0 ? 'bg-yellow-100 text-yellow-700' : i === 1 ? 'bg-gray-100 text-gray-600' : i === 2 ? 'bg-orange-100 text-orange-700' : 'bg-gray-50 text-gray-400'}`}>
+            ${i === 0 ? 'bg-yellow-500/20 text-yellow-400' : i === 1 ? 'bg-gray-600 text-gray-300' : i === 2 ? 'bg-orange-500/20 text-orange-400' : 'bg-gray-700 text-gray-500'}`}>
             {i + 1}
           </div>
           <div className="flex-1">
-            <div className="font-semibold text-sm text-gray-900">{pt.player.name}</div>
+            <div className="font-semibold text-sm text-white">{pt.player.name}</div>
             <div className="text-xs text-gray-400">
               {roundNumbers.map((r) => `R${r}: ${pt.rounds[r] ?? '—'}`).join(' · ')}
             </div>
           </div>
-          <div className="text-xl font-bold text-green-700">{pt.total}</div>
+          <div className="text-xl font-bold text-green-400">{pt.total}</div>
         </div>
       ))}
     </div>
@@ -118,6 +119,11 @@ function WolfTab({ players, groupings, wolfHoles, holes, activeRoundId }) {
     const deltas = {}
     const holeLog = []
 
+    // Use actual hole numbers (e.g. 10-18 for back-9) so wolfHoles stored at those keys are found
+    const holeNums = holes.length > 0
+      ? holes.map((h) => h.hole_number)
+      : Array.from({ length: holeCount }, (_, i) => i + 1)
+
     const groupNums = [...new Set(roundGroupings.map((g) => g.group_number))].sort((a, b) => a - b)
     for (const groupNum of groupNums) {
       const gPlayers = roundGroupings.filter((g) => g.group_number === groupNum).sort((a, b) => a.wolf_order - b.wolf_order)
@@ -126,9 +132,14 @@ function WolfTab({ players, groupings, wolfHoles, holes, activeRoundId }) {
       gPlayers.forEach((g) => (deltas[g.player_id] = deltas[g.player_id] || 0))
 
       let carry = 0
-      for (let hole = 1; hole <= holeCount; hole++) {
+      for (let hi = 0; hi < holeNums.length; hi++) {
+        const hole = holeNums[hi]
+        const isComebackHole = hi >= holeCount - 4
         const wh = wolfHoles.find((w) => w.hole_number === hole && w.group_number === groupNum)
-        if (!wh || !wh.result) { carry += wh?.base_value || 1; continue }
+        if (!wh || !wh.result) {
+          carry = isComebackHole ? 0 : carry + (wh?.base_value || 1)
+          continue
+        }
 
         const effectiveVal = carry + wh.base_value
         const mult = MULTIPLIERS[wh.declaration] || 1
@@ -140,32 +151,38 @@ function WolfTab({ players, groupings, wolfHoles, holes, activeRoundId }) {
           groupNum,
           wolfId: wh.wolf_player_id,
           partnerId: wh.partner_player_id,
+          throwerId: wh.declaration === DECLARATION.THREW ? wh.partner_player_id : null,
           declaration: wh.declaration,
           pot,
           result: wh.result,
           carry: carry > 0,
         })
 
-        if (wh.result === 'push') { carry += wh.base_value; continue }
+        if (wh.result === 'push') { carry = isComebackHole ? 0 : carry + wh.base_value; continue }
         carry = 0
 
+        // Additive model: winners each get +pot, losers stay at 0
         if (wh.declaration === DECLARATION.PARTNER) {
-          const winners = [wh.wolf_player_id, wh.partner_player_id].filter(Boolean)
-          const losers = ids.filter((id) => !winners.includes(id))
+          const wolfTeam = [wh.wolf_player_id, wh.partner_player_id].filter(Boolean)
+          const others = ids.filter((id) => !wolfTeam.includes(id))
           if (wh.result === 'wolf_win') {
-            winners.forEach((id) => (deltas[id] += pot * losers.length))
-            losers.forEach((id) => (deltas[id] -= pot * winners.length))
+            wolfTeam.forEach((id) => (deltas[id] += pot))
           } else {
-            winners.forEach((id) => (deltas[id] -= pot * losers.length))
-            losers.forEach((id) => (deltas[id] += pot * winners.length))
+            others.forEach((id) => (deltas[id] += pot))
+          }
+        } else if (wh.declaration === DECLARATION.THREW) {
+          const throwerId = wh.partner_player_id
+          const others = ids.filter((id) => id !== throwerId)
+          if (wh.result === 'wolf_win') {
+            if (throwerId) deltas[throwerId] += pot
+          } else {
+            others.forEach((id) => (deltas[id] += pot))
           }
         } else {
           const others = ids.filter((id) => id !== wh.wolf_player_id)
           if (wh.result === 'wolf_win') {
-            deltas[wh.wolf_player_id] += pot * others.length
-            others.forEach((id) => (deltas[id] -= pot))
+            deltas[wh.wolf_player_id] += pot
           } else {
-            deltas[wh.wolf_player_id] -= pot * others.length
             others.forEach((id) => (deltas[id] += pot))
           }
         }
@@ -173,7 +190,7 @@ function WolfTab({ players, groupings, wolfHoles, holes, activeRoundId }) {
     }
 
     return { deltas, holeLog }
-  }, [groupings, wolfHoles, activeRoundId, holeCount])
+  }, [groupings, wolfHoles, holes, activeRoundId, holeCount])
 
   const sorted = Object.entries(deltas).sort((a, b) => b[1] - a[1])
 
@@ -185,14 +202,14 @@ function WolfTab({ players, groupings, wolfHoles, holes, activeRoundId }) {
         {sorted.map(([pid, pts], i) => {
           const p = players.find((pl) => pl.id === pid)
           return (
-            <div key={pid} className="bg-white rounded-xl border border-gray-200 px-4 py-3 flex items-center gap-3">
+            <div key={pid} className="bg-gray-800 rounded-xl border border-gray-700 px-4 py-3 flex items-center gap-3">
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold
-                ${i === 0 ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-50 text-gray-400'}`}>
+                ${i === 0 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-gray-700 text-gray-500'}`}>
                 {i + 1}
               </div>
-              <div className="flex-1 font-semibold text-sm">{p?.name}</div>
-              <div className={`text-lg font-bold ${pts > 0 ? 'text-green-600' : pts < 0 ? 'text-red-500' : 'text-gray-500'}`}>
-                {pts > 0 ? '+' : ''}{pts}
+              <div className="flex-1 font-semibold text-sm text-white">{p?.name}</div>
+              <div className={`text-lg font-bold ${pts > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                {pts}
               </div>
             </div>
           )
@@ -200,25 +217,26 @@ function WolfTab({ players, groupings, wolfHoles, holes, activeRoundId }) {
       </div>
 
       {holeLog.length > 0 && (
-        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide bg-gray-50">
+        <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+          <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide bg-gray-700">
             Hole Log
           </div>
-          <div className="divide-y divide-gray-100">
+          <div className="divide-y divide-gray-700">
             {holeLog.map((entry, i) => {
               const wolf = players.find((p) => p.id === entry.wolfId)
+              const thrower = entry.throwerId ? players.find((p) => p.id === entry.throwerId) : null
               return (
                 <div key={i} className="px-4 py-2.5 flex items-center justify-between">
                   <div>
                     <div className="text-sm font-medium">
-                      H{entry.hole} — {wolf?.name}
-                      {entry.carry && <span className="text-xs text-orange-600 ml-1">(carry)</span>}
+                      H{entry.hole} — {thrower ? `${thrower.name} ⚡` : wolf?.name}
+                      {entry.carry && <span className="text-xs text-orange-400 ml-1">(carry)</span>}
                     </div>
                     <div className="text-xs text-gray-400">
                       {declarationShort(entry.declaration)} · {entry.pot}pt
                     </div>
                   </div>
-                  <div className={`text-sm font-semibold ${entry.result === 'wolf_win' ? 'text-green-600' : entry.result === 'wolf_lose' ? 'text-red-500' : 'text-gray-400'}`}>
+                  <div className={`text-sm font-semibold ${entry.result === 'wolf_win' ? 'text-green-400' : entry.result === 'wolf_lose' ? 'text-red-500' : 'text-gray-400'}`}>
                     {entry.result === 'wolf_win' ? 'Win' : entry.result === 'wolf_lose' ? 'Lose' : 'Push'}
                   </div>
                 </div>
@@ -232,7 +250,41 @@ function WolfTab({ players, groupings, wolfHoles, holes, activeRoundId }) {
 }
 
 function declarationShort(d) {
-  return { blind: 'Blind 4×', early: 'Lone 3×', late: 'Lone 2×', partner: 'Partner 1×' }[d] || d
+  return { blind: 'Blind 4×', early: 'Lone 3×', late: 'Lone 2×', partner: 'Partner 1×', threw: 'Threw 2×' }[d] || d
+}
+
+// ── Orientation hook ────────────────────────────────────────────────────────
+
+function useOrientation() {
+  const [isLandscape, setIsLandscape] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(orientation: landscape)').matches
+  )
+  useEffect(() => {
+    const mq = window.matchMedia('(orientation: landscape)')
+    const handle = (e) => setIsLandscape(e.matches)
+    mq.addEventListener('change', handle)
+    return () => mq.removeEventListener('change', handle)
+  }, [])
+  return isLandscape
+}
+
+// ── Golf score cell (birdie=red circle, bogey=square, eagle=gold circle) ────
+
+function GolfScore({ gross, par }) {
+  if (gross == null) return <span className="text-gray-700 text-xs">·</span>
+  const diff = par != null ? gross - par : null
+  let ring = '', text = ''
+  if (diff === null)    { text = 'text-gray-300' }
+  else if (diff <= -2)  { ring = 'ring-2 ring-yellow-400 rounded-full'; text = 'text-yellow-300' }
+  else if (diff === -1) { ring = 'ring-1 ring-red-500 rounded-full';    text = 'text-white' }
+  else if (diff === 0)  { text = 'text-green-400' }
+  else if (diff === 1)  { ring = 'ring-1 ring-gray-500 rounded-sm';     text = 'text-gray-300' }
+  else                  { ring = 'ring-2 ring-red-700 rounded-sm';       text = 'text-red-400' }
+  return (
+    <span className={`inline-flex items-center justify-center w-6 h-6 text-xs font-bold ${ring} ${text}`}>
+      {gross}
+    </span>
+  )
 }
 
 // ── Skins ──────────────────────────────────────────────────────────────────
@@ -265,12 +317,12 @@ function SkinsTab({ players, groupings, scores, holes, activeRoundId }) {
           {sortedPlayers.map(([pid, val], i) => {
             const p = players.find((pl) => pl.id === pid)
             return (
-              <div key={pid} className="bg-white rounded-xl border border-gray-200 px-4 py-3 flex items-center gap-3">
+              <div key={pid} className="bg-gray-800 rounded-xl border border-gray-700 px-4 py-3 flex items-center gap-3">
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold
-                  ${i === 0 ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-50 text-gray-400'}`}>
+                  ${i === 0 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-gray-700 text-gray-500'}`}>
                   {i + 1}
                 </div>
-                <div className="flex-1 font-semibold text-sm">{p?.name}</div>
+                <div className="flex-1 font-semibold text-sm text-white">{p?.name}</div>
                 <div className="text-lg font-bold text-green-600">{val} skin{val !== 1 ? 's' : ''}</div>
               </div>
             )
@@ -278,27 +330,27 @@ function SkinsTab({ players, groupings, scores, holes, activeRoundId }) {
         </div>
       )}
 
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide bg-gray-50 grid grid-cols-4">
+      <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+        <div className="px-4 py-2 text-xs font-semibold text-gray-500 uppercase tracking-wide bg-gray-700 grid grid-cols-4">
           <span>Hole</span>
           <span className="text-center">Par</span>
           <span className="text-center">Value</span>
           <span className="text-right">Winner</span>
         </div>
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-gray-700">
           {skinResults.map((skin) => {
             const winner = skin.winnerId ? players.find((p) => p.id === skin.winnerId) : null
             return (
               <div key={skin.holeNumber} className="px-4 py-2.5 grid grid-cols-4 items-center">
-                <span className="text-sm font-medium text-gray-700">{skin.holeNumber}</span>
+                <span className="text-sm font-medium text-gray-300">{skin.holeNumber}</span>
                 <span className="text-center text-sm text-gray-500">{holes.find((h) => h.hole_number === skin.holeNumber)?.par}</span>
-                <span className={`text-center text-sm font-semibold ${skin.value > 1 ? 'text-orange-600' : 'text-gray-600'}`}>
+                <span className={`text-center text-sm font-semibold ${skin.value > 1 ? 'text-orange-400' : 'text-gray-400'}`}>
                   {skin.value > 0 ? skin.value : '—'}
                 </span>
                 <span className="text-right text-sm">
                   {skin.pending ? <span className="text-gray-300 italic">pending</span>
                     : skin.push ? <span className="text-gray-400 italic">carry</span>
-                    : winner ? <span className="font-medium text-green-700">{winner.name.split(' ')[0]}</span>
+                    : winner ? <span className="font-medium text-green-400">{winner.name.split(' ')[0]}</span>
                     : '—'}
                 </span>
               </div>
@@ -334,11 +386,11 @@ function NassauTab({ players, groupings, scores, holes, activeRoundId }) {
   return (
     <div className="p-4 space-y-4">
       {nassauData.map((nr) => (
-        <div key={nr.groupNumber} className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <div className={`px-4 py-2 text-sm font-semibold ${nr.groupNumber === 1 ? 'bg-green-50 text-green-800' : 'bg-blue-50 text-blue-800'}`}>
+        <div key={nr.groupNumber} className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+          <div className={`px-4 py-2 text-sm font-semibold ${nr.groupNumber === 1 ? 'bg-green-900/40 text-green-400' : 'bg-blue-900/40 text-blue-400'}`}>
             Group {nr.groupNumber}
           </div>
-          <div className="divide-y divide-gray-100">
+          <div className="divide-y divide-gray-700">
             {/* Standings */}
             {Object.entries(nr.netTotals)
               .sort((a, b) => a[1].total - b[1].total)
@@ -346,24 +398,24 @@ function NassauTab({ players, groupings, scores, holes, activeRoundId }) {
                 const p = players.find((pl) => pl.id === pid)
                 return (
                   <div key={pid} className="px-4 py-3 flex items-center justify-between">
-                    <div className="font-medium text-sm">{p?.name}</div>
+                    <div className="font-medium text-sm text-white">{p?.name}</div>
                     <div className="flex gap-4 text-xs text-gray-500">
                       <span>F: {totals.front || '—'}</span>
                       <span>B: {totals.back || '—'}</span>
-                      <span className="font-semibold text-gray-800">T: {totals.total || '—'}</span>
+                      <span className="font-semibold text-gray-300">T: {totals.total || '—'}</span>
                     </div>
                   </div>
                 )
               })}
           </div>
-          <div className="px-4 py-2 bg-gray-50 border-t border-gray-100 grid grid-cols-3 text-xs text-center gap-2">
+          <div className="px-4 py-2 bg-gray-700 border-t border-gray-600 grid grid-cols-3 text-xs text-center gap-2">
             {['front', 'back', 'overall'].map((seg) => {
               const winnerId = nr[`${seg}Winner`]
               const winner = winnerId ? players.find((p) => p.id === winnerId) : null
               return (
                 <div key={seg}>
                   <div className="text-gray-400 capitalize">{seg}</div>
-                  <div className="font-semibold text-gray-800">{winner ? winner.name.split(' ')[0] : 'TBD'}</div>
+                  <div className="font-semibold text-white">{winner ? winner.name.split(' ')[0] : 'TBD'}</div>
                 </div>
               )
             })}
@@ -376,92 +428,287 @@ function NassauTab({ players, groupings, scores, holes, activeRoundId }) {
 
 // ── Scorecard ──────────────────────────────────────────────────────────────
 
+// One half of the scorecard (front 9 or back 9)
+function HalfCard({ players, holes, scores, activeRoundId, allHoles, label, showTot }) {
+  const hasYards = holes.some((h) => h.yards)
+  const hasPar   = holes.some((h) => h.par)
+  const halfPar  = holes.reduce((s, h) => s + (h.par   || 0), 0)
+  const halfYds  = holes.reduce((s, h) => s + (h.yards || 0), 0)
+  const totalPar = allHoles.reduce((s, h) => s + (h.par || 0), 0)
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs border-collapse" style={{ minWidth: 'min-content' }}>
+        <thead>
+          <tr className="bg-gray-700">
+            <th className="text-left pl-3 pr-1 py-1.5 text-gray-400 font-semibold w-14">HOLE</th>
+            {holes.map((h) => (
+              <th key={h.hole_number} className="text-center px-0 py-1.5 text-gray-400 font-semibold w-7 min-w-[1.6rem]">
+                {h.hole_number}
+              </th>
+            ))}
+            <th className="text-center px-1.5 py-1.5 text-white font-bold border-l border-gray-600 w-9 min-w-9 bg-gray-600/50">
+              {label === 'FRONT' ? 'OUT' : 'IN'}
+            </th>
+            {showTot && (
+              <th className="text-center px-1.5 py-1.5 text-white font-bold border-l border-gray-600 w-9 min-w-9">TOT</th>
+            )}
+          </tr>
+
+          {hasYards && (
+            <tr className="bg-gray-900">
+              <td className="pl-3 pr-1 py-0.5 text-blue-400 font-semibold">YDS</td>
+              {holes.map((h) => (
+                <td key={h.hole_number} className="text-center px-0 py-0.5 text-blue-300/80 leading-none">
+                  {h.yards || ''}
+                </td>
+              ))}
+              <td className="text-center px-1.5 py-0.5 text-blue-300 font-semibold border-l border-gray-700 bg-gray-800/40">
+                {halfYds || ''}
+              </td>
+              {showTot && <td className="border-l border-gray-700" />}
+            </tr>
+          )}
+
+          {hasPar && (
+            <tr className="bg-gray-800/50">
+              <td className="pl-3 pr-1 py-0.5 text-gray-500 font-semibold">PAR</td>
+              {holes.map((h) => (
+                <td key={h.hole_number} className="text-center px-0 py-0.5 text-gray-500">
+                  {h.par || ''}
+                </td>
+              ))}
+              <td className="text-center px-1.5 py-0.5 text-gray-400 font-semibold border-l border-gray-700 bg-gray-800/40">
+                {halfPar || ''}
+              </td>
+              {showTot && (
+                <td className="text-center px-1.5 py-0.5 text-gray-400 font-semibold border-l border-gray-700">
+                  {totalPar || ''}
+                </td>
+              )}
+            </tr>
+          )}
+        </thead>
+
+        <tbody>
+          {players.map((g, idx) => {
+            const pScores = scores.filter((s) => s.round_id === activeRoundId && s.player_id === g.player_id)
+            const halfGross = holes.reduce((sum, h) => {
+              const s = pScores.find((sc) => sc.hole_number === h.hole_number)
+              return s?.gross_strokes != null ? sum + s.gross_strokes : sum
+            }, 0)
+            const halfPlayed = holes.some((h) => pScores.find((sc) => sc.hole_number === h.hole_number)?.gross_strokes != null)
+            const totGross = allHoles.reduce((sum, h) => {
+              const s = pScores.find((sc) => sc.hole_number === h.hole_number)
+              return s?.gross_strokes != null ? sum + s.gross_strokes : sum
+            }, 0)
+            const totPlayed = allHoles.some((h) => pScores.find((sc) => sc.hole_number === h.hole_number)?.gross_strokes != null)
+
+            return (
+              <tr key={g.player_id} className={`border-t border-gray-800 ${idx % 2 === 1 ? 'bg-gray-800/30' : ''}`}>
+                <td className="pl-3 pr-1 py-2 font-bold text-gray-200 truncate max-w-[3.5rem]">
+                  {g.player?.name?.split(' ')[0]}
+                </td>
+                {holes.map((h) => {
+                  const s = pScores.find((sc) => sc.hole_number === h.hole_number)
+                  return (
+                    <td key={h.hole_number} className="text-center px-0 py-2">
+                      <GolfScore gross={s?.gross_strokes} par={h.par} />
+                    </td>
+                  )
+                })}
+                <td className="text-center px-1.5 py-2 font-bold text-white border-l border-gray-700 bg-gray-800/20">
+                  {halfPlayed ? halfGross : '—'}
+                </td>
+                {showTot && (
+                  <td className="text-center px-1.5 py-2 font-bold text-green-400 border-l border-gray-700">
+                    {totPlayed ? totGross : '—'}
+                  </td>
+                )}
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// Full 18-hole card shown in landscape
+function FullCard({ players, frontHoles, backHoles, scores, activeRoundId, hasPar, hasYards }) {
+  const frontPar = frontHoles.reduce((s, h) => s + (h.par   || 0), 0)
+  const backPar  = backHoles.reduce( (s, h) => s + (h.par   || 0), 0)
+  const frontYds = frontHoles.reduce((s, h) => s + (h.yards || 0), 0)
+  const backYds  = backHoles.reduce( (s, h) => s + (h.yards || 0), 0)
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="text-xs border-collapse" style={{ minWidth: 'max-content' }}>
+        <thead>
+          <tr className="bg-gray-700">
+            <th className="text-left pl-3 pr-2 py-1.5 text-gray-400 font-semibold w-16">HOLE</th>
+            {frontHoles.map((h) => (
+              <th key={h.hole_number} className="text-center px-1 py-1.5 text-gray-400 font-semibold w-8">{h.hole_number}</th>
+            ))}
+            <th className="text-center px-2 py-1.5 text-white font-bold border-x border-gray-500 w-10 bg-gray-600/50">OUT</th>
+            {backHoles.map((h) => (
+              <th key={h.hole_number} className="text-center px-1 py-1.5 text-gray-400 font-semibold w-8">{h.hole_number}</th>
+            ))}
+            <th className="text-center px-2 py-1.5 text-white font-bold border-x border-gray-500 w-10 bg-gray-600/50">IN</th>
+            <th className="text-center px-2 py-1.5 text-white font-bold w-10">TOT</th>
+          </tr>
+
+          {hasYards && (
+            <tr className="bg-gray-900">
+              <td className="pl-3 pr-2 py-0.5 text-blue-400 font-semibold">YDS</td>
+              {frontHoles.map((h) => <td key={h.hole_number} className="text-center px-1 py-0.5 text-blue-300/80">{h.yards || ''}</td>)}
+              <td className="text-center px-2 py-0.5 text-blue-300 font-semibold border-x border-gray-700 bg-gray-800/50">{frontYds || ''}</td>
+              {backHoles.map((h) => <td key={h.hole_number} className="text-center px-1 py-0.5 text-blue-300/80">{h.yards || ''}</td>)}
+              <td className="text-center px-2 py-0.5 text-blue-300 font-semibold border-x border-gray-700 bg-gray-800/50">{backYds || ''}</td>
+              <td className="text-center px-2 py-0.5 text-blue-300 font-semibold">{(frontYds + backYds) || ''}</td>
+            </tr>
+          )}
+
+          {hasPar && (
+            <tr className="bg-gray-800/50">
+              <td className="pl-3 pr-2 py-0.5 text-gray-500 font-semibold">PAR</td>
+              {frontHoles.map((h) => <td key={h.hole_number} className="text-center px-1 py-0.5 text-gray-500">{h.par || ''}</td>)}
+              <td className="text-center px-2 py-0.5 text-gray-400 font-semibold border-x border-gray-700 bg-gray-800/40">{frontPar || ''}</td>
+              {backHoles.map((h) => <td key={h.hole_number} className="text-center px-1 py-0.5 text-gray-500">{h.par || ''}</td>)}
+              <td className="text-center px-2 py-0.5 text-gray-400 font-semibold border-x border-gray-700 bg-gray-800/40">{backPar || ''}</td>
+              <td className="text-center px-2 py-0.5 text-gray-400 font-semibold">{(frontPar + backPar) || ''}</td>
+            </tr>
+          )}
+        </thead>
+
+        <tbody>
+          {players.map((g, idx) => {
+            const pScores = scores.filter((s) => s.round_id === activeRoundId && s.player_id === g.player_id)
+            const halfScore = (hls) => hls.reduce((sum, h) => {
+              const s = pScores.find((sc) => sc.hole_number === h.hole_number)
+              return s?.gross_strokes != null ? sum + s.gross_strokes : sum
+            }, 0)
+            const halfPlayed = (hls) => hls.some((h) => pScores.find((sc) => sc.hole_number === h.hole_number)?.gross_strokes != null)
+            const out = halfScore(frontHoles)
+            const inn = halfScore(backHoles)
+            const outPlayed = halfPlayed(frontHoles)
+            const inPlayed  = halfPlayed(backHoles)
+
+            return (
+              <tr key={g.player_id} className={`border-t border-gray-800 ${idx % 2 === 1 ? 'bg-gray-800/30' : ''}`}>
+                <td className="pl-3 pr-2 py-2 font-bold text-gray-200 whitespace-nowrap">{g.player?.name?.split(' ')[0]}</td>
+                {frontHoles.map((h) => {
+                  const s = pScores.find((sc) => sc.hole_number === h.hole_number)
+                  return <td key={h.hole_number} className="text-center px-1 py-2"><GolfScore gross={s?.gross_strokes} par={h.par} /></td>
+                })}
+                <td className="text-center px-2 py-2 font-bold text-white border-x border-gray-700 bg-gray-800/20">{outPlayed ? out : '—'}</td>
+                {backHoles.map((h) => {
+                  const s = pScores.find((sc) => sc.hole_number === h.hole_number)
+                  return <td key={h.hole_number} className="text-center px-1 py-2"><GolfScore gross={s?.gross_strokes} par={h.par} /></td>
+                })}
+                <td className="text-center px-2 py-2 font-bold text-white border-x border-gray-700 bg-gray-800/20">{inPlayed ? inn : '—'}</td>
+                <td className="text-center px-2 py-2 font-bold text-green-400">{(outPlayed || inPlayed) ? out + inn : '—'}</td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function ScorecardTab({ players, groupings, scores, holes, activeRoundId }) {
+  const isLandscape = useOrientation()
+
   const roundGroupings = groupings
     .filter((g) => g.round_id === activeRoundId)
     .sort((a, b) => a.group_number - b.group_number || a.wolf_order - b.wolf_order)
     .map((g) => ({ ...g, player: players.find((p) => p.id === g.player_id) }))
 
-  if (!roundGroupings.length || !holes.length) return <EmptyState message="No scorecard data yet." />
+  if (!roundGroupings.length) return <EmptyState message="No scorecard data yet." />
 
-  const front = holes.filter((h) => h.hole_number <= 9)
-  const back = holes.filter((h) => h.hole_number > 9)
+  const sortedHoles = [...holes].sort((a, b) => a.hole_number - b.hole_number)
+  const hasCourse = sortedHoles.length > 0
+  const hasPar    = sortedHoles.some((h) => h.par)
+  const hasYards  = sortedHoles.some((h) => h.yards)
+
+  // If no course scanned, generate placeholder holes from scored holes
+  const maxHole = hasCourse
+    ? sortedHoles[sortedHoles.length - 1].hole_number
+    : scores.filter((s) => s.round_id === activeRoundId).reduce((m, s) => Math.max(m, s.hole_number), 18)
+  const displayHoles = hasCourse
+    ? sortedHoles
+    : Array.from({ length: maxHole }, (_, i) => ({ hole_number: i + 1, par: null, yards: null }))
+
+  const is18       = displayHoles.length >= 18
+  const frontHoles = is18 ? displayHoles.filter((h) => h.hole_number <= 9)  : displayHoles
+  const backHoles  = is18 ? displayHoles.filter((h) => h.hole_number > 9)   : []
+  const groups     = [...new Set(roundGroupings.map((g) => g.group_number))].sort((a, b) => a - b)
 
   return (
-    <div className="overflow-x-auto">
-      {[...new Set(roundGroupings.map((g) => g.group_number))].sort((a, b) => a - b).map((groupNum) => {
-        const gPlayers = roundGroupings.filter((g) => g.group_number === groupNum)
-        if (!gPlayers.length) return null
-        return (
-          <div key={groupNum} className="mb-4">
-            <div className={`px-4 py-2 text-xs font-bold uppercase tracking-wide ${groupNum === 1 ? 'text-green-700' : 'text-blue-700'}`}>
-              Group {groupNum}
+    <div className="pb-8">
+      {!hasPar && (
+        <p className="text-xs text-gray-500 text-center py-2 px-4">Scan a scorecard to show par and yardages</p>
+      )}
+
+      {isLandscape && is18 ? (
+        // Landscape: classic full 18-hole card
+        <div className="px-2 pt-2">
+          {groups.map((groupNum) => (
+            <div key={groupNum} className="mb-4">
+              <div className={`px-2 pb-1 text-xs font-bold uppercase tracking-widest ${groupNum === 1 ? 'text-green-400' : 'text-blue-400'}`}>
+                Group {groupNum}
+              </div>
+              <FullCard
+                players={roundGroupings.filter((g) => g.group_number === groupNum)}
+                frontHoles={frontHoles}
+                backHoles={backHoles}
+                scores={scores}
+                activeRoundId={activeRoundId}
+                hasPar={hasPar}
+                hasYards={hasYards}
+              />
             </div>
-            <table className="w-full text-xs border-collapse">
-              <thead>
-                <tr className="bg-gray-100">
-                  <th className="px-2 py-1.5 text-left font-semibold text-gray-600 w-20">Player</th>
-                  {holes.map((h) => (
-                    <th key={h.hole_number} className={`px-1 py-1.5 text-center font-semibold w-8
-                      ${h.hole_number === 9 ? 'border-r-2 border-gray-300' : ''}
-                      ${h.hole_number <= 9 ? 'text-gray-600' : 'text-gray-500'}`}>
-                      {h.hole_number}
-                    </th>
-                  ))}
-                  <th className="px-2 py-1.5 text-center font-semibold text-gray-700 w-10">TOT</th>
-                </tr>
-                <tr className="bg-gray-50">
-                  <td className="px-2 py-1 text-gray-400">Par</td>
-                  {holes.map((h) => (
-                    <td key={h.hole_number} className={`px-1 py-1 text-center text-gray-500 ${h.hole_number === 9 ? 'border-r-2 border-gray-300' : ''}`}>
-                      {h.par}
-                    </td>
-                  ))}
-                  <td className="px-2 py-1 text-center text-gray-600 font-medium">
-                    {holes.reduce((s, h) => s + h.par, 0)}
-                  </td>
-                </tr>
-              </thead>
-              <tbody>
-                {gPlayers.map((g) => {
-                  const roundScores = scores.filter((s) => s.round_id === activeRoundId && s.player_id === g.player_id)
-                  const totalGross = roundScores.reduce((s, sc) => s + (sc.gross_strokes || 0), 0)
-                  return (
-                    <tr key={g.player_id} className="border-t border-gray-100">
-                      <td className="px-2 py-1.5 font-medium text-gray-800 whitespace-nowrap">{g.player?.name?.split(' ')[0]}</td>
-                      {holes.map((h) => {
-                        const s = roundScores.find((sc) => sc.hole_number === h.hole_number)
-                        const gross = s?.gross_strokes
-                        const par = h.par
-                        const diff = gross != null ? gross - par : null
-                        return (
-                          <td key={h.hole_number} className={`px-1 py-1.5 text-center ${h.hole_number === 9 ? 'border-r-2 border-gray-300' : ''}`}>
-                            {gross != null ? (
-                              <span className={`inline-flex items-center justify-center w-6 h-6 rounded text-xs font-semibold
-                                ${diff <= -2 ? 'bg-yellow-200 text-yellow-800'
-                                  : diff === -1 ? 'bg-red-100 text-red-700 rounded-full'
-                                  : diff === 0 ? 'text-green-700'
-                                  : diff === 1 ? 'text-gray-700'
-                                  : 'text-gray-400'}`}>
-                                {gross}
-                              </span>
-                            ) : (
-                              <span className="text-gray-200">—</span>
-                            )}
-                          </td>
-                        )
-                      })}
-                      <td className="px-2 py-1.5 text-center font-bold text-gray-900">
-                        {totalGross || '—'}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        )
-      })}
+          ))}
+        </div>
+      ) : (
+        // Portrait: stacked front / back halves
+        <div className="pt-1">
+          {groups.map((groupNum) => {
+            const gPlayers = roundGroupings.filter((g) => g.group_number === groupNum)
+            return (
+              <div key={groupNum} className="mb-5">
+                <div className={`px-4 py-1 text-xs font-bold uppercase tracking-widest ${groupNum === 1 ? 'text-green-400' : 'text-blue-400'}`}>
+                  Group {groupNum}
+                </div>
+                <HalfCard
+                  players={gPlayers}
+                  holes={frontHoles}
+                  scores={scores}
+                  activeRoundId={activeRoundId}
+                  allHoles={displayHoles}
+                  label="FRONT"
+                  showTot={!is18}
+                />
+                {is18 && (
+                  <HalfCard
+                    players={gPlayers}
+                    holes={backHoles}
+                    scores={scores}
+                    activeRoundId={activeRoundId}
+                    allHoles={displayHoles}
+                    label="BACK"
+                    showTot={true}
+                  />
+                )}
+              </div>
+            )
+          })}
+          {is18 && (
+            <p className="text-xs text-gray-600 text-center pb-2">↺ Rotate to landscape for full 18-hole view</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -470,7 +717,7 @@ function EmptyState({ message }) {
   return (
     <div className="flex flex-col items-center justify-center py-20 text-center px-6">
       <div className="text-4xl mb-3">⛳</div>
-      <p className="text-gray-500 text-sm">{message}</p>
+      <p className="text-gray-400 text-sm">{message}</p>
     </div>
   )
 }

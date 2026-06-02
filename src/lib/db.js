@@ -5,6 +5,24 @@ const PLAYER_COLORS = ['#16a34a','#2563eb','#dc2626','#d97706','#7c3aed','#db277
 
 // ── Trips ──────────────────────────────────────────────────────────────────
 
+export async function getTrip(tripId) {
+  const { data, error } = await supabase
+    .from('trips')
+    .select('*')
+    .eq('id', tripId)
+    .single()
+  if (error) throw error
+  return data
+}
+
+export async function completeTrip(tripId) {
+  const { error } = await supabase
+    .from('trips')
+    .update({ status: 'complete' })
+    .eq('id', tripId)
+  if (error) throw error
+}
+
 export async function getTripByCode(joinCode) {
   const { data, error } = await supabase
     .from('trips')
@@ -45,16 +63,25 @@ export async function getPlayers(tripId) {
   return data
 }
 
-export async function createPlayer({ tripId, name, handicap = 0, colorHex }) {
-  // Pick next available color if not specified
+export async function createPlayer({ tripId, name, handicap = 0, colorHex, userId }) {
   const color = colorHex || PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)]
+  const row = { trip_id: tripId, name, handicap, color_hex: color }
+  if (userId) row.user_id = userId
   const { data, error } = await supabase
     .from('players')
-    .insert({ trip_id: tripId, name, handicap, color_hex: color })
+    .insert(row)
     .select()
     .single()
   if (error) throw error
   return data
+}
+
+export async function updatePlayerUserId(playerId, userId) {
+  const { error } = await supabase
+    .from('players')
+    .update({ user_id: userId })
+    .eq('id', playerId)
+  if (error) throw error
 }
 
 export async function updatePlayerHandicap(playerId, handicap) {
@@ -251,7 +278,7 @@ export async function getPayments(tripId) {
   return data
 }
 
-export async function markPayment({ tripId, fromPlayerId, toPlayerId, amount, note }) {
+export async function markPayment({ tripId, fromPlayerId, toPlayerId, amount }) {
   const { data, error } = await supabase
     .from('payments')
     .insert({
@@ -259,7 +286,6 @@ export async function markPayment({ tripId, fromPlayerId, toPlayerId, amount, no
       from_player_id: fromPlayerId,
       to_player_id: toPlayerId,
       amount,
-      note: note || null,
       paid_at: new Date().toISOString(),
     })
     .select()
@@ -271,6 +297,18 @@ export async function markPayment({ tripId, fromPlayerId, toPlayerId, amount, no
 export async function deletePayment(paymentId) {
   const { error } = await supabase.from('payments').delete().eq('id', paymentId)
   if (error) throw error
+}
+
+// ── User trip history ──────────────────────────────────────────────────────
+
+export async function getTripsForUser(userId) {
+  const { data, error } = await supabase
+    .from('players')
+    .select('id, name, handicap, trip:trips(id, name, join_code, dollar_per_point, created_at)')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return data // [{ id, name, trip: { id, name, join_code, ... } }]
 }
 
 // ── Full trip data fetch ───────────────────────────────────────────────────

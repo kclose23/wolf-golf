@@ -91,7 +91,7 @@ export default function CourseScanScreen({ onBack, onSaved }) {
         <button
           onClick={() => fileRef.current?.click()}
           disabled={scanning}
-          className="w-full border-2 border-dashed border-gray-300 rounded-xl py-8 flex flex-col items-center gap-2 hover:border-green-400 transition-colors disabled:opacity-50"
+          className="w-full border-2 border-dashed border-gray-700 rounded-xl py-8 flex flex-col items-center gap-2 hover:border-green-500 transition-colors disabled:opacity-50"
         >
           {scanning ? (
             <>
@@ -101,8 +101,8 @@ export default function CourseScanScreen({ onBack, onSaved }) {
           ) : (
             <>
               <span className="text-4xl">📷</span>
-              <span className="text-sm font-medium text-gray-600">Tap to photo scorecard</span>
-              <span className="text-xs text-gray-400">or select from library</span>
+              <span className="text-sm font-medium text-gray-300">Tap to photo scorecard</span>
+              <span className="text-xs text-gray-500">or select from library</span>
             </>
           )}
         </button>
@@ -112,7 +112,7 @@ export default function CourseScanScreen({ onBack, onSaved }) {
         )}
 
         {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+          <div className="bg-red-900/40 border border-red-800 rounded-lg p-3 text-sm text-red-400">
             {error}
           </div>
         )}
@@ -120,38 +120,38 @@ export default function CourseScanScreen({ onBack, onSaved }) {
         {(holes.length === 9 || holes.length === 18) && (
           <div className="space-y-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Course Name</label>
+              <label className="block text-sm font-medium text-gray-400 mb-1">Course Name</label>
               <input
                 type="text"
                 value={courseName}
                 onChange={(e) => setCourseName(e.target.value)}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500"
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500"
               />
             </div>
 
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-              <div className="grid grid-cols-4 px-3 py-2 text-xs font-semibold text-gray-500 bg-gray-50">
+            <div className="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden">
+              <div className="grid grid-cols-4 px-3 py-2 text-xs font-semibold text-gray-400 bg-gray-700">
                 <span>Hole</span>
                 <span className="text-center">Par</span>
                 <span className="text-center">S.I.</span>
                 <span className="text-right">Yards</span>
               </div>
-              <div className="divide-y divide-gray-100 max-h-72 overflow-y-auto">
+              <div className="divide-y divide-gray-700 max-h-72 overflow-y-auto">
                 {holes.map((h, i) => (
                   <div key={i} className="grid grid-cols-4 px-3 py-2 items-center">
-                    <span className="text-sm font-medium text-gray-600">{h.holeNumber}</span>
+                    <span className="text-sm font-medium text-gray-300">{h.holeNumber}</span>
                     <input
                       type="number"
                       value={h.par}
                       onChange={(e) => updateHole(i, 'par', parseInt(e.target.value))}
-                      className="text-center text-sm border-0 focus:ring-1 focus:ring-green-500 rounded w-12 mx-auto"
+                      className="text-center text-sm bg-transparent text-white border-0 focus:ring-1 focus:ring-green-500 rounded w-12 mx-auto"
                       min={3} max={5}
                     />
                     <input
                       type="number"
                       value={h.strokeIndex}
                       onChange={(e) => updateHole(i, 'strokeIndex', parseInt(e.target.value))}
-                      className="text-center text-sm border-0 focus:ring-1 focus:ring-green-500 rounded w-12 mx-auto"
+                      className="text-center text-sm bg-transparent text-white border-0 focus:ring-1 focus:ring-green-500 rounded w-12 mx-auto"
                       min={1} max={18}
                     />
                     <span className="text-right text-sm text-gray-500">{h.yards || '—'}</span>
