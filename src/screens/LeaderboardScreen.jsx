@@ -10,7 +10,7 @@ import BottomNav from '../components/BottomNav'
 
 const TABS = [
   { id: 'wolf', label: 'Wolf' },
-  { id: 'stableford', label: 'Stableford' },
+  { id: 'leaders', label: 'Leaders' },
   { id: 'skins', label: 'Skins' },
   { id: 'nassau', label: 'Nassau' },
   { id: 'overall', label: 'Scorecard' },
@@ -34,7 +34,7 @@ export default function LeaderboardScreen({ setScreen }) {
       <TabBar tabs={TABS} active={tab} onChange={setTab} />
 
       <div className="flex-1 pb-24">
-        {tab === 'stableford' && <StablefordTab players={players} groupings={groupings} scores={scores} courses={courses} rounds={rounds} holes={holes} />}
+        {tab === 'leaders' && <TournamentBoardTab players={players} groupings={groupings} scores={scores} courses={courses} rounds={rounds} />}
         {tab === 'wolf' && <WolfTab players={players} groupings={groupings} wolfHoles={wolfHoles} holes={holes} activeRoundId={activeRoundId} />}
         {tab === 'skins' && <SkinsTab players={players} groupings={groupings} scores={scores} holes={holes} activeRoundId={activeRoundId} />}
         {tab === 'nassau' && <NassauTab players={players} groupings={groupings} scores={scores} holes={holes} activeRoundId={activeRoundId} />}
@@ -42,6 +42,262 @@ export default function LeaderboardScreen({ setScreen }) {
       </div>
 
       <BottomNav screen="leaderboard" setScreen={setScreen} />
+    </div>
+  )
+}
+
+// ── Tournament Board ────────────────────────────────────────────────────────
+
+function PosBadge({ pos, small }) {
+  const sz = small ? 'w-5 h-5 text-[10px]' : 'w-6 h-6 text-xs'
+  const cl =
+    pos === 1 ? 'bg-yellow-500 text-gray-900' :
+    pos === 2 ? 'bg-gray-400 text-gray-900' :
+    pos === 3 ? 'bg-amber-700 text-white' :
+    'bg-gray-700 text-gray-400'
+  return (
+    <span className={`inline-flex items-center justify-center rounded-sm font-bold ${sz} ${cl}`}>
+      {pos}
+    </span>
+  )
+}
+
+function TournamentBoardTab({ players, groupings, scores, courses, rounds }) {
+  const sortedRounds = useMemo(
+    () => [...rounds].sort((a, b) => a.round_number - b.round_number),
+    [rounds]
+  )
+  const [view, setView] = useState('trip')
+
+  // Per-player, per-round, per-hole stableford points
+  const perHolePts = useMemo(() => {
+    const result = {}
+    for (const player of players) result[player.id] = {}
+
+    for (const round of sortedRounds) {
+      const course = courses.find((c) => c.round_number === round.round_number)
+      if (!course) continue
+      const holes = (course.holes || []).sort((a, b) => a.hole_number - b.hole_number)
+
+      for (const g of groupings.filter((g) => g.round_id === round.id)) {
+        const player = players.find((p) => p.id === g.player_id)
+        if (!player) continue
+        result[player.id][round.round_number] = result[player.id][round.round_number] || {}
+
+        for (const hole of holes) {
+          const s = scores.find(
+            (sc) => sc.player_id === player.id && sc.hole_number === hole.hole_number && sc.round_id === round.id
+          )
+          if (!s || s.gross_strokes === null) continue
+          const esi = effectiveStrokeIndex(hole.stroke_index, holes)
+          const pts = stablefordPoints(
+            netScore(s.gross_strokes, player.handicap || 0, esi, holes.length) - hole.par
+          )
+          result[player.id][round.round_number][hole.hole_number] = pts
+        }
+      }
+    }
+    return result
+  }, [players, groupings, scores, courses, sortedRounds])
+
+  const roundNum = view === 'trip' ? null : parseInt(view.replace('r', ''))
+  const roundCourse = roundNum ? courses.find((c) => c.round_number === roundNum) : null
+  const roundHoles = useMemo(
+    () => (roundCourse?.holes || []).sort((a, b) => a.hole_number - b.hole_number),
+    [roundCourse]
+  )
+  const hasPrior = roundNum != null && sortedRounds.some((r) => r.round_number < roundNum)
+
+  const rows = useMemo(() => {
+    return players
+      .map((player) => {
+        const roundTotals = {}
+        for (const r of sortedRounds) {
+          roundTotals[r.round_number] = Object.values(
+            perHolePts[player.id]?.[r.round_number] || {}
+          ).reduce((s, v) => s + v, 0)
+        }
+        const tripTotal = Object.values(roundTotals).reduce((s, v) => s + v, 0)
+
+        const priorPts = hasPrior
+          ? sortedRounds
+              .filter((r) => r.round_number < roundNum)
+              .reduce((sum, r) => sum + (roundTotals[r.round_number] || 0), 0)
+          : 0
+
+        const holeMap = roundNum ? (perHolePts[player.id]?.[roundNum] || {}) : {}
+        let cum = priorPts
+        const cells = roundHoles.map((h) => {
+          const pts = holeMap[h.hole_number]
+          if (pts !== undefined) { cum += pts; return { cum, pts, played: true } }
+          return { cum: null, pts: null, played: false }
+        })
+
+        const displayTotal =
+          view === 'trip' ? tripTotal : priorPts + (roundTotals[roundNum] || 0)
+
+        return { player, roundTotals, tripTotal, priorPts, cells, displayTotal }
+      })
+      .filter((r) => r.tripTotal > 0)
+      .sort((a, b) => b.displayTotal - a.displayTotal)
+  }, [players, perHolePts, sortedRounds, view, roundNum, roundHoles, hasPrior])
+
+  if (!rows.length) return <EmptyState message="Scores will appear here as players complete holes." />
+
+  const totalPar = roundHoles.reduce((s, h) => s + (h.par || 0), 0)
+
+  const ViewToggle = () => (
+    <div className="bg-gray-900 border-b border-gray-800 flex gap-1.5 px-3 py-2.5 overflow-x-auto no-scrollbar">
+      {[{ id: 'trip', label: 'Trip' }, ...sortedRounds.map((r) => ({ id: `r${r.round_number}`, label: `Round ${r.round_number}` }))].map((opt) => (
+        <button
+          key={opt.id}
+          onClick={() => setView(opt.id)}
+          className={`px-3 py-1 rounded-md text-xs font-semibold whitespace-nowrap transition-colors
+            ${view === opt.id ? 'bg-green-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'}`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  )
+
+  // ── Trip standings ──────────────────────────────────────────────────────
+  if (view === 'trip') {
+    return (
+      <div>
+        <ViewToggle />
+        <div className="bg-green-950 border-b border-green-900 py-1.5 text-center">
+          <span className="text-[10px] font-bold text-green-500 uppercase tracking-[0.18em]">
+            Leaders · Stableford · Higher is Better
+          </span>
+        </div>
+        <table className="w-full border-collapse">
+          <thead>
+            <tr className="bg-gray-800 border-b border-gray-700 text-[10px] text-gray-500 uppercase tracking-wide">
+              <th className="px-3 py-2.5 text-center" style={{ width: 44 }}>Pos</th>
+              <th className="px-3 py-2.5 text-left">Player</th>
+              {sortedRounds.map((r) => (
+                <th key={r.id} className="px-2 py-2.5 text-center" style={{ width: 44 }}>R{r.round_number}</th>
+              ))}
+              <th className="px-3 py-2.5 text-center" style={{ width: 52 }}>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => (
+              <tr key={row.player.id} className={`border-b border-gray-800 ${i % 2 !== 0 ? 'bg-gray-800/20' : ''}`}>
+                <td className="px-3 py-3 text-center"><PosBadge pos={i + 1} /></td>
+                <td className="px-3 py-3 font-semibold text-white text-sm">{row.player.name}</td>
+                {sortedRounds.map((r) => (
+                  <td key={r.id} className="px-2 py-3 text-center text-sm">
+                    <span className={row.roundTotals[r.round_number] > 0 ? 'text-red-400 font-medium' : 'text-gray-700'}>
+                      {row.roundTotals[r.round_number] > 0 ? row.roundTotals[r.round_number] : '—'}
+                    </span>
+                  </td>
+                ))}
+                <td className="px-3 py-3 text-center">
+                  <span className="text-red-400 font-bold text-lg">{row.tripTotal}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    )
+  }
+
+  // ── Round board (Masters style) ─────────────────────────────────────────
+  return (
+    <div>
+      <ViewToggle />
+      <div className="bg-green-950 border-b border-green-900 py-1.5 text-center">
+        <span className="text-[10px] font-bold text-green-500 uppercase tracking-[0.18em]">
+          Round {roundNum} · Running Stableford Total
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="border-collapse text-xs" style={{ minWidth: 'max-content' }}>
+          <thead>
+            {/* Hole numbers header */}
+            <tr className="bg-gray-800 border-b border-gray-700 text-[10px] text-gray-500 uppercase">
+              <th className="sticky left-0 z-20 bg-gray-800 text-center border-r border-gray-700 px-0 py-2.5" style={{ width: 30, minWidth: 30 }}>#</th>
+              <th className="sticky z-20 bg-gray-800 text-left border-r border-gray-700 px-2 py-2.5" style={{ left: 30, width: 84, minWidth: 84 }}>Player</th>
+              {hasPrior && (
+                <th className="text-center border-r border-gray-700 px-1 py-2.5 text-gray-600" style={{ width: 36, minWidth: 36 }}>Prior</th>
+              )}
+              {roundHoles.map((h, i) => (
+                <th
+                  key={h.hole_number}
+                  className={`text-center text-gray-300 font-bold px-0 py-2.5 ${i === 8 && roundHoles.length > 9 ? 'border-r border-gray-600' : ''}`}
+                  style={{ width: 28, minWidth: 28 }}
+                >
+                  {h.hole_number}
+                </th>
+              ))}
+              <th className="text-center text-gray-300 font-bold border-l border-gray-700 px-2 py-2.5" style={{ width: 36, minWidth: 36 }}>
+                Tot
+              </th>
+            </tr>
+            {/* Par row */}
+            <tr className="bg-green-950 border-b border-green-900 text-[10px] text-green-500">
+              <td className="sticky left-0 z-20 bg-green-950 border-r border-green-900 px-0 py-1.5" style={{ width: 30, minWidth: 30 }} />
+              <td className="sticky z-20 bg-green-950 border-r border-green-900 px-2 py-1.5 font-bold" style={{ left: 30, width: 84, minWidth: 84 }}>PAR</td>
+              {hasPrior && <td className="border-r border-green-900 px-1 py-1.5" style={{ width: 36 }} />}
+              {roundHoles.map((h, i) => (
+                <td
+                  key={h.hole_number}
+                  className={`text-center font-medium px-0 py-1.5 ${i === 8 && roundHoles.length > 9 ? 'border-r border-green-900' : ''}`}
+                  style={{ width: 28 }}
+                >
+                  {h.par}
+                </td>
+              ))}
+              <td className="text-center font-medium border-l border-green-900 px-2 py-1.5" style={{ width: 36 }}>{totalPar || ''}</td>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, i) => {
+              const bg = i % 2 === 0 ? '#111827' : '#161f2e'
+              return (
+                <tr key={row.player.id} className="border-b border-gray-800/50">
+                  <td className="sticky left-0 z-10 text-center border-r border-gray-800 px-0 py-3" style={{ background: bg, width: 30, minWidth: 30 }}>
+                    <PosBadge pos={i + 1} small />
+                  </td>
+                  <td
+                    className="sticky z-10 border-r border-gray-800 px-2 py-3 font-bold text-white"
+                    style={{ background: bg, left: 30, width: 84, minWidth: 84, maxWidth: 84 }}
+                  >
+                    <span className="block truncate uppercase text-[11px] tracking-wide">
+                      {row.player.name}
+                    </span>
+                  </td>
+                  {hasPrior && (
+                    <td className="text-center border-r border-gray-800 px-1 py-3 text-gray-500" style={{ width: 36 }}>
+                      {row.priorPts > 0 ? row.priorPts : '—'}
+                    </td>
+                  )}
+                  {row.cells.map((cell, hi) => (
+                    <td
+                      key={hi}
+                      className={`text-center px-0 py-3 ${hi === 8 && roundHoles.length > 9 ? 'border-r border-gray-700' : ''}`}
+                      style={{ width: 28 }}
+                    >
+                      {cell.played
+                        ? <span className="text-red-400 font-bold">{cell.cum}</span>
+                        : <span className="text-gray-800">·</span>
+                      }
+                    </td>
+                  ))}
+                  <td className="text-center border-l border-gray-800 px-2 py-3" style={{ width: 36 }}>
+                    <span className="text-red-400 font-bold">
+                      {row.displayTotal > 0 ? row.displayTotal : '—'}
+                    </span>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
