@@ -20,6 +20,7 @@ export default function AdminSetupScreen({ onDone, onBack }) {
     rounds.length > 0 ? rounds.length + 1 : 1
   )
   const [date, setDate] = useState(new Date().toISOString().split('T')[0])
+  const [dayLabel, setDayLabel] = useState('')
 
   // Dynamic groups: array of arrays of player ids
   const [groups, setGroups] = useState([[]])
@@ -109,7 +110,7 @@ export default function AdminSetupScreen({ onDone, onBack }) {
     setLoading(true)
     setError('')
     try {
-      const round = await createOrUpdateRound({ tripId, roundNumber, date, status: 'active' })
+      const round = await createOrUpdateRound({ tripId, roundNumber, date, status: 'active', dayLabel: dayLabel || null })
 
       const groupingRows = []
       for (let gi = 0; gi < groups.length; gi++) {
@@ -158,14 +159,29 @@ export default function AdminSetupScreen({ onDone, onBack }) {
               </button>
             </div>
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-400 mb-1">Date</label>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-green-500"
-            />
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <label className="block text-sm font-medium text-gray-400 mb-1">Date</label>
+              <input
+                type="date"
+                value={date}
+                onChange={(e) => setDate(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-4 py-3 focus:outline-none focus:ring-2 focus:ring-green-500"
+              />
+            </div>
+            <div className="w-28">
+              <label className="block text-sm font-medium text-gray-400 mb-1">Day</label>
+              <select
+                value={dayLabel}
+                onChange={(e) => setDayLabel(e.target.value)}
+                className="w-full bg-gray-800 border border-gray-700 text-white rounded-lg px-3 py-3 focus:outline-none focus:ring-2 focus:ring-green-500"
+              >
+                <option value="">—</option>
+                <option value="Thursday">Thursday</option>
+                <option value="Friday">Friday</option>
+                <option value="Saturday">Saturday</option>
+              </select>
+            </div>
           </div>
           <button
             onClick={() => setStep('groups')}
@@ -178,6 +194,29 @@ export default function AdminSetupScreen({ onDone, onBack }) {
     )
   }
 
+  function autoFillGroups(method) {
+    const playerList = [...players]
+    if (playerList.length < 2) return
+    const groupCount = Math.max(2, Math.min(4, Math.ceil(playerList.length / 4)))
+    const newGroups = Array.from({ length: groupCount }, () => [])
+    if (method === 'balanced') {
+      playerList.sort((a, b) => (b.handicap ?? 0) - (a.handicap ?? 0))
+      playerList.forEach((p, i) => {
+        const round = Math.floor(i / groupCount)
+        const pos = i % groupCount
+        newGroups[round % 2 === 0 ? pos : groupCount - 1 - pos].push(p.id)
+      })
+    } else {
+      for (let i = playerList.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1))
+        ;[playerList[i], playerList[j]] = [playerList[j], playerList[i]]
+      }
+      playerList.forEach((p, i) => newGroups[i % groupCount].push(p.id))
+    }
+    setGroups(newGroups)
+    setWolfOrder(newGroups.map((g) => [...g]))
+  }
+
   // ── Groups step ────────────────────────────────────────────────────────────
 
   if (step === 'groups') {
@@ -186,6 +225,28 @@ export default function AdminSetupScreen({ onDone, onBack }) {
     return (
       <Layout title="Assign Groups" onBack={() => setStep('round')}>
         <div className="space-y-4">
+
+          {/* Auto-fill */}
+          {players.length >= 2 && (
+            <div className="bg-gray-800 rounded-xl border border-gray-700 p-4 space-y-2">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Auto-fill Groups</p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => autoFillGroups('balanced')}
+                  className="flex-1 bg-green-700 text-white py-2 rounded-lg text-sm font-semibold"
+                >
+                  ⚖ Balanced by Handicap
+                </button>
+                <button
+                  onClick={() => autoFillGroups('random')}
+                  className="flex-1 bg-gray-700 text-gray-200 py-2 rounded-lg text-sm font-semibold"
+                >
+                  🎲 Random
+                </button>
+              </div>
+              <p className="text-xs text-gray-600">Adjust manually below after filling</p>
+            </div>
+          )}
 
           {/* Add player inline */}
           <form onSubmit={handleAddPlayer} className="bg-gray-800 rounded-xl border border-gray-700 p-4 space-y-3">

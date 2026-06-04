@@ -33,10 +33,10 @@ export async function getTripByCode(joinCode) {
   return data
 }
 
-export async function createTrip({ name, joinCode, dollarPerPoint = 1 }) {
+export async function createTrip({ name, joinCode, dollarPerPoint = 1, buyIn = 0 }) {
   const { data, error } = await supabase
     .from('trips')
-    .insert({ name, join_code: joinCode.toUpperCase(), dollar_per_point: dollarPerPoint })
+    .insert({ name, join_code: joinCode.toUpperCase(), dollar_per_point: dollarPerPoint, buy_in: buyIn })
     .select()
     .single()
   if (error) throw error
@@ -63,9 +63,9 @@ export async function getPlayers(tripId) {
   return data
 }
 
-export async function createPlayer({ tripId, name, handicap = 0, colorHex, userId }) {
+export async function createPlayer({ tripId, name, handicap = 0, colorHex, userId, isAdmin = false }) {
   const color = colorHex || PLAYER_COLORS[Math.floor(Math.random() * PLAYER_COLORS.length)]
-  const row = { trip_id: tripId, name, handicap, color_hex: color }
+  const row = { trip_id: tripId, name, handicap, color_hex: color, is_admin: isAdmin }
   if (userId) row.user_id = userId
   const { data, error } = await supabase
     .from('players')
@@ -142,11 +142,11 @@ export async function getRounds(tripId) {
   return data
 }
 
-export async function createOrUpdateRound({ tripId, roundNumber, courseId, date, status = 'active' }) {
+export async function createOrUpdateRound({ tripId, roundNumber, courseId, date, status = 'active', dayLabel = null }) {
   const { data, error } = await supabase
     .from('rounds')
     .upsert(
-      { trip_id: tripId, round_number: roundNumber, course_id: courseId || null, date: date || null, status },
+      { trip_id: tripId, round_number: roundNumber, course_id: courseId || null, date: date || null, status, day_label: dayLabel },
       { onConflict: 'trip_id,round_number' }
     )
     .select()
@@ -157,6 +157,46 @@ export async function createOrUpdateRound({ tripId, roundNumber, courseId, date,
 
 export async function setRoundStatus(roundId, status) {
   const { error } = await supabase.from('rounds').update({ status }).eq('id', roundId)
+  if (error) throw error
+}
+
+export async function deleteTrip(tripId) {
+  // Fetch IDs needed for child-table deletes
+  const [{ data: rounds }, { data: courses }] = await Promise.all([
+    supabase.from('rounds').select('id').eq('trip_id', tripId),
+    supabase.from('courses').select('id').eq('trip_id', tripId),
+  ])
+  const roundIds = rounds?.map((r) => r.id) || []
+  const courseIds = courses?.map((c) => c.id) || []
+
+  if (roundIds.length > 0) {
+    await Promise.all([
+      supabase.from('wolf_holes').delete().in('round_id', roundIds),
+      supabase.from('scores').delete().in('round_id', roundIds),
+      supabase.from('groupings').delete().in('round_id', roundIds),
+    ])
+  }
+  if (courseIds.length > 0) {
+    await supabase.from('holes').delete().in('course_id', courseIds)
+  }
+  await Promise.all([
+    supabase.from('rounds').delete().eq('trip_id', tripId),
+    supabase.from('courses').delete().eq('trip_id', tripId),
+    supabase.from('payments').delete().eq('trip_id', tripId),
+    supabase.from('players').delete().eq('trip_id', tripId),
+  ])
+  const { error } = await supabase.from('trips').delete().eq('id', tripId)
+  if (error) throw error
+}
+
+export async function deleteRound(roundId) {
+  // Delete dependents first (no cascade assumed)
+  await Promise.all([
+    supabase.from('wolf_holes').delete().eq('round_id', roundId),
+    supabase.from('scores').delete().eq('round_id', roundId),
+    supabase.from('groupings').delete().eq('round_id', roundId),
+  ])
+  const { error } = await supabase.from('rounds').delete().eq('id', roundId)
   if (error) throw error
 }
 
@@ -321,4 +361,73 @@ export async function loadTripData(tripId) {
     getPayments(tripId),
   ])
   return { players, courses, rounds, payments }
+}
+
+// ── Chip-offs (unresolved skins settled by chip-off after hole 18) ─────────
+
+export async function saveChipOff({ roundId, winnerPlayerId, skinsWon }) {
+  const { error } = await supabase
+    .from('chip_offs')
+    .upsert({ round_id: roundId, winner_player_id: winnerPlayerId, skins_won: skinsWon }, { onConflict: 'round_id' })
+  if (error) throw error
+}
+
+export async function getChipOffs(roundIds) {
+  if (!roundIds.length) return []
+  const { data, error } = await supabase
+    .from('chip_offs')
+    .select('*')
+    .in('round_id', roundIds)
+  if (error) throw error
+  return data
+}
+
+// ── All-rounds data (groupings, scores, wolf_holes for every round) ────────
+
+export async function loadAllRoundsData(roundIds) {
+  if (!roundIds.length) return { groupings: [], scores: [], wolfHoles: [], chipOffs: [] }
+  const [groupRes, scoreRes, wolfRes, chipRes] = await Promise.all([
+    supabase.from('groupings').select('*, player:players(*)').in('round_id', roundIds).order('group_number').order('wolf_order'),
+    supabase.from('scores').select('*').in('round_id', roundIds).order('hole_number'),
+    supabase.from('wolf_holes').select('*').in('round_id', roundIds).order('hole_number'),
+    supabase.from('chip_offs').select('*').in('round_id', roundIds),
+  ])
+  if (groupRes.error) throw groupRes.error
+  if (scoreRes.error) throw scoreRes.error
+  if (wolfRes.error) throw wolfRes.error
+  if (chipRes.error) throw chipRes.error
+  return { groupings: groupRes.data, scores: scoreRes.data, wolfHoles: wolfRes.data, chipOffs: chipRes.data }
+}
+
+// Save a named course placeholder (no holes) — holes added later via Scan
+export async function saveCourseStub({ tripId, name, roundNumber }) {
+  if (!name?.trim()) return null
+  const { data: course, error } = await supabase
+    .from('courses')
+    .upsert(
+      { trip_id: tripId, name: name.trim(), round_number: roundNumber },
+      { onConflict: 'trip_id,round_number' }
+    )
+    .select()
+    .single()
+  if (error) throw error
+  return course
+}
+
+// Copy an existing course's holes to a new round number
+export async function copyCourseForRound(tripId, fromRoundNumber, toRoundNumber) {
+  const { data: src, error } = await supabase
+    .from('courses')
+    .select('*, holes(*)')
+    .eq('trip_id', tripId)
+    .eq('round_number', fromRoundNumber)
+    .single()
+  if (error) throw error
+  const holes = src.holes.map((h) => ({
+    holeNumber: h.hole_number,
+    par: h.par,
+    strokeIndex: h.stroke_index,
+    yards: h.yards,
+  }))
+  return saveCourse({ tripId, name: src.name, roundNumber: toRoundNumber, holes })
 }

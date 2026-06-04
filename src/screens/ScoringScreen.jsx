@@ -27,10 +27,10 @@ export default function ScoringScreen({ setScreen }) {
   const totalHoles = holes.length || 18
 
   // My group
-  const myGrouping = groupings.find((g) => g.player_id === playerId)
+  const myGrouping = groupings.find((g) => g.player_id === playerId && g.round_id === activeRoundId)
   const myGroupNumber = myGrouping?.group_number
   const myGroupPlayers = groupings
-    .filter((g) => g.group_number === myGroupNumber)
+    .filter((g) => g.round_id === activeRoundId && g.group_number === myGroupNumber)
     .sort((a, b) => a.wolf_order - b.wolf_order)
 
   const isScorer = Boolean(myGrouping) // only players in a group can score
@@ -51,7 +51,7 @@ export default function ScoringScreen({ setScreen }) {
   const wolfPosition = holeIndex % 4
   const regularWolfId = myGroupPlayers[wolfPosition]?.player_id
   const wolfHole = wolfHoles.find(
-    (w) => w.hole_number === holeNumber && w.group_number === myGroupNumber
+    (w) => w.hole_number === holeNumber && w.group_number === myGroupNumber && w.round_id === activeRoundId
   )
 
   // Cumulative wolf points for comeback detection.
@@ -63,8 +63,8 @@ export default function ScoringScreen({ setScreen }) {
     let carry = 0
     for (let i = 0; i < totalHoles; i++) {
       const hn = holes.length > 0 ? holes[i]?.hole_number : i + 1
-      const wh = wolfHoles.find((w) => w.hole_number === hn && w.group_number === myGroupNumber)
-      const isComebackHole = i >= totalHoles - 4
+      const wh = wolfHoles.find((w) => w.hole_number === hn && w.group_number === myGroupNumber && w.round_id === activeRoundId)
+      const isComebackHole = i >= totalHoles - 3
       if (!wh || !wh.result) {
         carry = isComebackHole ? 0 : carry + (wh?.base_value || 1)
         continue
@@ -105,7 +105,7 @@ export default function ScoringScreen({ setScreen }) {
   }, [wolfHoles, myGroupPlayers, myGroupNumber, holes, totalHoles])
 
   // Comeback hole: last 4 holes by play order (index), not absolute hole number
-  const isComeback = holeIndex >= totalHoles - 4
+  const isComeback = holeIndex >= totalHoles - 3
 
   // All players tied for the lowest points (only relevant on comeback holes)
   const tiedLowPlayers = useMemo(() => {
@@ -140,8 +140,8 @@ export default function ScoringScreen({ setScreen }) {
     let carry = 0
     for (let i = 0; i < holeIndex; i++) {
       const hn = holes.length > 0 ? holes[i]?.hole_number : i + 1
-      const wh = wolfHoles.find((w) => w.hole_number === hn && w.group_number === myGroupNumber)
-      const isComebackHole = i >= totalHoles - 4
+      const wh = wolfHoles.find((w) => w.hole_number === hn && w.group_number === myGroupNumber && w.round_id === activeRoundId)
+      const isComebackHole = i >= totalHoles - 3
       if (!wh || wh.result === 'push') {
         carry = isComebackHole ? 0 : carry + (wh?.base_value || 1)
       } else {
@@ -188,7 +188,7 @@ export default function ScoringScreen({ setScreen }) {
       })
     )
     setDraftScores(newDraft)
-    const nextWh = wolfHoles.find((w) => w.hole_number === nextHole && w.group_number === myGroupNumber)
+    const nextWh = wolfHoles.find((w) => w.hole_number === nextHole && w.group_number === myGroupNumber && w.round_id === activeRoundId)
     setDeclaration(nextWh?.declaration || null)
     setPartnerId(nextWh?.partner_player_id || null)
     setBaseValue(nextWh?.base_value || 1)
@@ -328,7 +328,7 @@ export default function ScoringScreen({ setScreen }) {
   }
 
   const allScoresIn = myGroupPlayers.every((g) => draftScores[g.player_id] !== '')
-  const currentHoleWh = wolfHoles.find((w) => w.hole_number === holeNumber && w.group_number === myGroupNumber)
+  const currentHoleWh = wolfHoles.find((w) => w.hole_number === holeNumber && w.group_number === myGroupNumber && w.round_id === activeRoundId)
 
   const par = holeData?.par || 4
   const totalPot = (carryValue + (isComeback ? baseValue : 1)) * (MULTIPLIERS[declaration] || 1)

@@ -2,17 +2,17 @@ import { useMemo, useState } from 'react'
 import { useApp } from '../context/AppContext'
 import { markPayment, deletePayment } from '../lib/db'
 import {
-  MULTIPLIERS, DECLARATION, calcSkins, skinsTotals, calcNassau, strokesReceived, netScore,
+  MULTIPLIERS, DECLARATION, calcSkins, skinsTotals, strokesReceived, netScore,
 } from '../lib/gameEngine'
 import Layout from '../components/Layout'
 import BottomNav from '../components/BottomNav'
 import Spinner from '../components/Spinner'
 
-const ALL_GAMES = ['Wolf', 'Skins', 'Nassau']
+const ALL_GAMES = ['Wolf', 'Skins']
 
-export default function SettlementScreen({ setScreen }) {
+export default function SettlementScreen({ setScreen, embedded = false }) {
   const { state, actions } = useApp()
-  const { players, groupings, scores, wolfHoles, courses, rounds, payments, tripId, activeRoundId } = state
+  const { players, groupings, scores, wolfHoles, courses, rounds, payments, tripId, activeRoundId, playerId } = state
 
   const trip = state.trip
   const dollarPerPoint = trip?.dollar_per_point || 1
@@ -62,7 +62,7 @@ export default function SettlementScreen({ setScreen }) {
 
         for (let hi = 0; hi < holeCount; hi++) {
           const hole = holes.length > 0 ? (holes[hi]?.hole_number ?? hi + 1) : hi + 1
-          const isComebackHole = hi >= holeCount - 4
+          const isComebackHole = hi >= holeCount - 3
           const wh = roundWolfHoles.find((w) => w.hole_number === hole)
           if (!wh || !wh.result) {
             carry = isComebackHole ? 0 : carry + (wh?.base_value || 1)
@@ -141,33 +141,6 @@ export default function SettlementScreen({ setScreen }) {
       }
     }
 
-    // Nassau (per round, per group)
-    for (const round of rounds) {
-      const course = courses.find((c) => c.round_number === round.round_number)
-      const holes = (course?.holes || []).sort((a, b) => a.hole_number - b.hole_number)
-      if (!holes.length) continue
-
-      for (let groupNum = 1; groupNum <= 2; groupNum++) {
-        const roundGroupings = groupings
-          .filter((g) => g.round_id === round.id && g.group_number === groupNum)
-          .map((g) => ({ ...g, player: players.find((p) => p.id === g.player_id) }))
-        if (!roundGroupings.length) continue
-
-        const roundScores = scores.filter((s) => s.round_id === round.id)
-        const nr = calcNassau(roundScores, roundGroupings, holes, groupNum)
-        const nassauBet = dollarPerPoint
-
-        for (const [segKey, label] of [['frontWinner', 'Front'], ['backWinner', 'Back'], ['overallWinner', '18']]) {
-          const winnerId = nr[segKey]
-          if (!winnerId) continue
-          const losers = roundGroupings.map((g) => g.player_id).filter((id) => id !== winnerId)
-          losers.forEach((lid) => {
-            debts.push({ from: lid, to: winnerId, amount: nassauBet, game: `Nassau ${label} R${round.round_number} G${groupNum}`, gameType: 'Nassau' })
-          })
-        }
-      }
-    }
-
     return debts
   }, [rounds, groupings, scores, wolfHoles, courses, players, payments, dollarPerPoint])
 
@@ -224,12 +197,19 @@ export default function SettlementScreen({ setScreen }) {
 
   const totalOwed = netDebts.reduce((s, d) => s + Math.max(0, d.remaining), 0)
 
-  return (
-    <div className="min-h-screen bg-gray-900 flex flex-col max-w-md mx-auto">
-      <header className="bg-gray-900 border-b border-gray-800 px-4 py-3 sticky top-0 z-40">
-        <h1 className="text-base font-semibold text-white">Pay Up</h1>
-        <p className="text-xs text-gray-400">${dollarPerPoint}/pt · Total outstanding: ${totalOwed.toFixed(2)}</p>
-      </header>
+  const inner = (
+    <div className={embedded ? '' : 'min-h-screen bg-gray-900 flex flex-col max-w-md mx-auto'}>
+      {!embedded && (
+        <header className="bg-gray-900 border-b border-gray-800 px-4 py-3 sticky top-0 z-40">
+          <h1 className="text-base font-semibold text-white">Pay Up</h1>
+          <p className="text-xs text-gray-400">${dollarPerPoint}/pt · Total outstanding: ${totalOwed.toFixed(2)}</p>
+        </header>
+      )}
+      {embedded && (
+        <div className="px-4 pt-3 pb-1">
+          <p className="text-xs text-gray-500">Total outstanding: <span className="text-white font-semibold">${totalOwed.toFixed(2)}</span></p>
+        </div>
+      )}
 
       {/* Game opt-in toggles */}
       <div className="px-4 py-3 bg-gray-900 border-b border-gray-800 flex gap-2">
@@ -248,7 +228,7 @@ export default function SettlementScreen({ setScreen }) {
         })}
       </div>
 
-      <div className="flex-1 p-4 pb-28 space-y-3">
+      <div className={`flex-1 p-4 ${embedded ? 'pb-4' : 'pb-28'} space-y-3`}>
         {netDebts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
             <div className="text-4xl mb-3">🎉</div>
@@ -280,7 +260,7 @@ export default function SettlementScreen({ setScreen }) {
                     </div>
                   </div>
                 </div>
-                {!settled && (
+                {!settled && debt.to === playerId && (
                   <div className="px-4 pb-3">
                     <button
                       onClick={() => handlePay(debt)}
@@ -288,6 +268,11 @@ export default function SettlementScreen({ setScreen }) {
                     >
                       Mark Paid
                     </button>
+                  </div>
+                )}
+                {!settled && debt.to !== playerId && (
+                  <div className="px-4 pb-3">
+                    <p className="text-xs text-gray-600 text-center italic">Receiver confirms payment</p>
                   </div>
                 )}
               </div>
@@ -350,7 +335,8 @@ export default function SettlementScreen({ setScreen }) {
         </div>
       )}
 
-      <BottomNav screen="settlement" setScreen={setScreen} />
+      {!embedded && <BottomNav screen="settlement" setScreen={setScreen} />}
     </div>
   )
+  return embedded ? inner : inner
 }

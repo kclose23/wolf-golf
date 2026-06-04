@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useApp } from '../context/AppContext'
-import { getTripsForUser } from '../lib/db'
+import { getTripsForUser, deleteTrip } from '../lib/db'
 import Spinner from '../components/Spinner'
 
 export default function HistoryScreen({ onNewGame }) {
@@ -9,6 +9,7 @@ export default function HistoryScreen({ onNewGame }) {
   const [history, setHistory] = useState([])
   const [loading, setLoading] = useState(true)
   const [rejoining, setRejoining] = useState(null)
+  const [deleting, setDeleting] = useState(null)
   const [error, setError] = useState('')
 
   useEffect(() => {
@@ -18,6 +19,20 @@ export default function HistoryScreen({ onNewGame }) {
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false))
   }, [user])
+
+  async function handleDelete(tripId, tripName) {
+    if (!confirm(`Delete "${tripName}" and all its data? This cannot be undone.`)) return
+    setDeleting(tripId)
+    setError('')
+    try {
+      await deleteTrip(tripId)
+      setHistory((prev) => prev.filter((r) => r.trip.id !== tripId))
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setDeleting(null)
+    }
+  }
 
   async function handleRejoin(record) {
     setRejoining(record.trip.id)
@@ -107,13 +122,23 @@ export default function HistoryScreen({ onNewGame }) {
                             As <span className="font-semibold text-gray-300">{myPlayer.name}</span>
                           </div>
                         </div>
-                        <button
-                          onClick={() => handleRejoin(myPlayer)}
-                          disabled={rejoining === trip.id}
-                          className="shrink-0 bg-green-600 text-white px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-50 flex items-center gap-1"
-                        >
-                          {rejoining === trip.id ? <Spinner size="sm" /> : 'Rejoin'}
-                        </button>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => handleRejoin(myPlayer)}
+                            disabled={rejoining === trip.id || deleting === trip.id}
+                            className="bg-green-600 text-white px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-50 flex items-center gap-1"
+                          >
+                            {rejoining === trip.id ? <Spinner size="sm" /> : 'Rejoin'}
+                          </button>
+                          <button
+                            onClick={() => handleDelete(trip.id, trip.name)}
+                            disabled={deleting === trip.id || rejoining === trip.id}
+                            className="w-9 h-9 flex items-center justify-center rounded-xl border border-gray-700 text-gray-500 hover:text-red-400 hover:border-red-800 hover:bg-red-900/20 transition-colors disabled:opacity-30"
+                            title="Delete trip"
+                          >
+                            {deleting === trip.id ? <Spinner size="sm" /> : '🗑'}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   </div>

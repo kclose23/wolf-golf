@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useReducer, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
-import { getTripByCode, getTrip, loadTripData, getPlayers, getGroupings, getScores, getWolfHoles } from '../lib/db'
+import { getTripByCode, getTrip, loadTripData, loadAllRoundsData, getPlayers } from '../lib/db'
 import { flushQueue } from '../lib/offline'
 
 const AppContext = createContext(null)
@@ -35,6 +35,7 @@ const initialState = {
   groupings: [],
   scores: [],
   wolfHoles: [],
+  chipOffs: [],
   loading: true,
   error: null,
 }
@@ -75,6 +76,14 @@ function reducer(state, action) {
         : [...state.scores, newScore]
       return { ...state, scores }
     }
+    case 'UPSERT_CHIP_OFF': {
+      const co = action.chipOff
+      const existing = state.chipOffs.findIndex((c) => c.round_id === co.round_id)
+      const chipOffs = existing >= 0
+        ? state.chipOffs.map((c, i) => (i === existing ? co : c))
+        : [...state.chipOffs, co]
+      return { ...state, chipOffs }
+    }
     case 'UPSERT_WOLF_HOLE': {
       const wh = action.wolfHole
       const existing = state.wolfHoles.findIndex(
@@ -106,38 +115,51 @@ function reducer(state, action) {
 export function AppProvider({ children }) {
   const [state, dispatch] = useReducer(reducer, initialState)
 
-  const loadRoundData = useCallback(async (roundId) => {
-    if (!roundId) return
-    const [groupings, scores, wolfHoles] = await Promise.all([
-      getGroupings(roundId),
-      getScores(roundId),
-      getWolfHoles(roundId),
-    ])
-    dispatch({ type: 'SET_ROUND_DATA', payload: { groupings, scores, wolfHoles } })
-  }, [])
-
   const loadTrip = useCallback(async (tripId, roundId) => {
     dispatch({ type: 'SET_LOADING', value: true })
     try {
-      const [trip, { players, courses, rounds, payments }] = await Promise.all([
+      const [{ data: { session } }, trip, { players, courses, rounds, payments }] = await Promise.all([
+        supabase.auth.getSession(),
         getTrip(tripId),
         loadTripData(tripId),
       ])
 
+      // Prefer the explicitly-requested round; otherwise pick the highest-numbered active round
       const activeRound = roundId
         ? rounds.find((r) => r.id === roundId)
-        : rounds.find((r) => r.status === 'active') || rounds[rounds.length - 1]
+        : [...rounds].sort((a, b) => b.round_number - a.round_number).find((r) => r.status === 'active')
+          || [...rounds].sort((a, b) => b.round_number - a.round_number)[0]
 
-      dispatch({ type: 'SET_TRIP_DATA', payload: { trip, players, courses, rounds, payments } })
+      const allRoundData = rounds.length > 0
+        ? await loadAllRoundsData(rounds.map((r) => r.id))
+        : { groupings: [], scores: [], wolfHoles: [] }
+
+      // Detect admin: match by saved playerId OR by authenticated user ID.
+      // Using auth user ID means admin is always detected even after localStorage is wiped.
+      const savedPlayerId = localStorage.getItem('wolf_golf_player_id')
+      const authUserId = session?.user?.id
+      const me = players.find((p) =>
+        (savedPlayerId && p.id === savedPlayerId) ||
+        (authUserId && p.user_id === authUserId)
+      )
+      const isAdmin = me?.is_admin === true
+      if (isAdmin) localStorage.setItem('wolf_golf_is_admin', 'true')
+
+      dispatch({
+        type: 'SET_TRIP_DATA',
+        payload: {
+          trip, players, courses, rounds, payments, ...allRoundData,
+          ...(isAdmin ? { isAdmin: true } : {}),
+        },
+      })
 
       if (activeRound) {
         dispatch({ type: 'SET_ACTIVE_ROUND', roundId: activeRound.id })
-        await loadRoundData(activeRound.id)
       }
     } catch (e) {
       dispatch({ type: 'SET_ERROR', value: e.message })
     }
-  }, [loadRoundData])
+  }, [])
 
   // Auth initialization
   useEffect(() => {
@@ -163,29 +185,37 @@ export function AppProvider({ children }) {
   // Realtime subscriptions
   useEffect(() => {
     if (!state.tripId) return
+    const tripId = state.tripId
 
     const channel = supabase
-      .channel(`trip-${state.tripId}`)
+      .channel(`trip-${tripId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'scores' }, (payload) => {
         const s = payload.new
-        if (s && s.round_id === state.activeRoundId) {
-          dispatch({ type: 'UPSERT_SCORE', ...s, roundId: s.round_id, playerId: s.player_id, holeNumber: s.hole_number, grossScore: s.gross_strokes })
+        if (s) {
+          dispatch({ type: 'UPSERT_SCORE', roundId: s.round_id, playerId: s.player_id, holeNumber: s.hole_number, grossScore: s.gross_strokes })
         }
       })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'wolf_holes' }, (payload) => {
         const wh = payload.new
-        if (wh && wh.round_id === state.activeRoundId) {
+        if (wh) {
           dispatch({ type: 'UPSERT_WOLF_HOLE', wolfHole: wh })
         }
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'chip_offs' }, (payload) => {
+        const co = payload.new
+        if (co) dispatch({ type: 'UPSERT_CHIP_OFF', chipOff: co })
+      })
       .on('postgres_changes', { event: '*', schema: 'public', table: 'payments' }, () => {
-        // Reload payments
-        loadTripData(state.tripId).then(({ payments }) => dispatch({ type: 'SET_PAYMENTS', payments }))
+        loadTripData(tripId).then(({ payments }) => dispatch({ type: 'SET_PAYMENTS', payments }))
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'rounds', filter: `trip_id=eq.${tripId}` }, () => {
+        // Round created or status changed (pending→active) — reload so every device syncs
+        loadTrip(tripId, null)
       })
       .subscribe()
 
     return () => supabase.removeChannel(channel)
-  }, [state.tripId, state.activeRoundId])
+  }, [state.tripId, loadTrip])
 
   // Periodic flush
   useEffect(() => {
@@ -212,7 +242,6 @@ export function AppProvider({ children }) {
     },
     setActiveRound(roundId) {
       dispatch({ type: 'SET_ACTIVE_ROUND', roundId })
-      loadRoundData(roundId)
     },
     async reload() {
       await loadTrip(state.tripId, state.activeRoundId)
@@ -226,6 +255,9 @@ export function AppProvider({ children }) {
     },
     updateWolfHole(wolfHole) {
       dispatch({ type: 'UPSERT_WOLF_HOLE', wolfHole })
+    },
+    updateChipOff(chipOff) {
+      dispatch({ type: 'UPSERT_CHIP_OFF', chipOff })
     },
     clearSession() {
       dispatch({ type: 'CLEAR_SESSION' })
